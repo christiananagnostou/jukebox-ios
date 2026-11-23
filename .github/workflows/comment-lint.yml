@@ -23,8 +23,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           if [[ "$BASE_SHA" =~ ^0+$ || -z "$BASE_SHA" ]]; then
-            python3 -B -m tools.comments list > "$RUNNER_TEMP/jukebox-comments.jsonl"
-            test ! -s "$RUNNER_TEMP/jukebox-comments.jsonl"
-            exit
+            BASE_SHA=$(git rev-list --max-parents=0 "$GITHUB_SHA")
           fi
           python3 -B -m tools.comments --base "$BASE_SHA"

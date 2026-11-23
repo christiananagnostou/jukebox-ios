@@ -470,45 +470,28 @@ struct MusicHeaderActions: View {
     HStack(spacing: 0) {
       MusicLibraryPicker(
         browser: browser, identity: owner, isCurrent: current)
-      MusicPopover(
-        "Account and connection", identity: owner, identifier: "Accounts", isCurrent: current
-      ) { admitted, close in
-        Button {
-          guard admitted() else { return }
-          close()
-          connection = store.active
-        } label: {
-          MusicMenuRow(title: "Connection details", symbol: "network")
+      Menu {
+        Button("Connection details", systemImage: "network") {
+          if current() { connection = store.active }
         }
-        ForEach(store.connections) { account in
-          Button {
-            guard admitted() else { return }
-            close()
-            Task { if current() { await store.activate(account) } }
-          } label: {
-            MusicMenuRow(
-              title: account.username, symbol: "person.crop.circle",
-              selected: account.id == owner.account)
+        Section {
+          ForEach(store.connections) { account in
+            Button(
+              account.username, systemImage: account.id == owner.account ? "checkmark" : "person"
+            ) {
+              Task { if current() { await store.activate(account) } }
+            }
+          }
+          Button("Add account", systemImage: "person.badge.plus") {
+            if current() { store.addConnection() }
           }
         }
-        Button {
-          guard admitted() else { return }
-          close()
-          store.addConnection()
-        } label: {
-          MusicMenuRow(title: "Add account", symbol: "person.badge.plus")
-        }
-        Button(role: .destructive) {
-          guard admitted() else { return }
-          close()
+        Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
           Task { if current() { await store.logout() } }
-        } label: {
-          MusicMenuRow(
-            title: "Sign out", symbol: "rectangle.portrait.and.arrow.right", destructive: true)
         }
       } label: {
         MusicUtilityLabel(title: "Accounts", symbol: "person.crop.circle")
-      }.accessibilityLabel("Accounts")
+      }.accessibilityLabel("Accounts").accessibilityIdentifier("Accounts")
     }
   }
 }

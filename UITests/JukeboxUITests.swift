@@ -3636,6 +3636,50 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(app.buttons["Open After the last train"].waitForExistence(timeout: 3))
   }
+  @MainActor func testAccountMenuReopensConnectionDetailsAcrossTabs() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = ["--fixture", "--muted", "--transport-ui=" + UUID().uuidString]
+    app.launch()
+    defer { app.terminate() }
+    let tabs = app.tabBars.firstMatch
+    for title in ["Home", "Library", "Search"] {
+      let tab = tabs.buttons[title]
+      XCTAssertTrue(tab.waitForExistence(timeout: 8))
+      tab.tap()
+      app.buttons["Accounts"].tap()
+      app.buttons["Connection details"].tap()
+      let address = app.staticTexts["connection-server-address"]
+      XCTAssertTrue(address.waitForExistence(timeout: 4))
+      XCTAssertEqual(address.label, "https://fixture.invalid")
+      XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
+      app.buttons["Done"].tap()
+      XCTAssertTrue(address.waitForNonExistence(timeout: 4))
+      XCTAssertTrue(tab.isSelected)
+    }
+  }
+  @MainActor func testSavedAccountDetailsOpenOffline() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString, "--saved-account-fixture",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let details = app.buttons["Connection details for Offline listener"]
+    XCTAssertTrue(details.waitForExistence(timeout: 8))
+    details.tap()
+    let address = app.staticTexts["connection-server-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "http://offline.invalid/music")
+    XCTAssertEqual(app.staticTexts["connection-username"].label, "Offline listener")
+    XCTAssertTrue(app.buttons["Copy server address"].isHittable)
+    XCTAssertFalse(app.buttons["transport-start"].exists)
+    app.buttons["Done"].tap()
+    XCTAssertTrue(details.waitForExistence(timeout: 4))
+    XCTAssertTrue(app.textFields["Server address"].exists)
+    XCTAssertFalse(app.buttons["Connect"].isEnabled)
+  }
   @MainActor func testActiveConnectionDetailsAtLargeText() throws {
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
     app.launchArguments = ["--fixture", "--muted", "--large-text"]

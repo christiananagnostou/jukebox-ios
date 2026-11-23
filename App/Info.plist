@@ -15,9 +15,9 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
-	<string>72</string>
+	<string>73</string>
 	<key>JukeboxBuildMarker</key>
-	<string>PlaylistDetail-20261122-1</string>
+	<string>ConnectionDetails-1</string>
 	<key>MinimumOSVersion</key>
 	<string>27.0</string>
 	<key>NSAppTransportSecurity</key>

@@ -210,7 +210,16 @@ import SwiftUI
                 runID: runID, store: store, native: engine, vault: vaultForAcceptance,
                 fixture: fixture)
             case .interactive:
-              await store.enterFixture(service: fixture)
+              if arguments.contains("--saved-account-fixture") {
+                if let server = try? ServerAddress("http://offline.invalid/music") {
+                  let account = Connection(
+                    server: server, userID: "offline-listener", username: "Offline listener")
+                  try? await storageForAcceptance.saveConnections([account])
+                }
+                await store.bootstrap(autoConnect: false)
+              } else {
+                await store.enterFixture(service: fixture)
+              }
             case .cleanup(let runID):
               let documents = FileManager.default.urls(
                 for: .documentDirectory, in: .userDomainMask)[0]

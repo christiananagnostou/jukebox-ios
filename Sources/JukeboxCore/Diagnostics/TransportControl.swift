@@ -37,7 +37,8 @@ enum TransportControlLaunch {
         let supplied = Set(arguments)
         self =
           supplied.count == arguments.count && supplied.isSuperset(of: required)
-            && supplied.isSubset(of: required.union(["--slow-fixture", "--long-album"]))
+            && supplied.isSubset(
+              of: required.union(["--slow-fixture", "--long-album", "--saved-account-fixture"]))
           ? .interactive(id) : .rejected
       default: self = .rejected
       }

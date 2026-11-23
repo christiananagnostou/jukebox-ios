@@ -1,0 +1,7 @@
+.tmp/
+.build/
+Resources/Fixtures/
+**/xcuserdata/
+.DS_Store
+
+.swiftpm/

@@ -1,0 +1,30 @@
+name: Comment lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  comments:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test comment recognition and the ratchet
+        run: python3 -B -m unittest tools.tests.test_comments tools.lint.test_swift_comments
+      - name: Check new comments
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ "$BASE_SHA" =~ ^0+$ || -z "$BASE_SHA" ]]; then
+            python3 -B -m tools.comments list > "$RUNNER_TEMP/jukebox-comments.jsonl"
+            test ! -s "$RUNNER_TEMP/jukebox-comments.jsonl"
+            exit
+          fi
+          python3 -B -m tools.comments --base "$BASE_SHA"

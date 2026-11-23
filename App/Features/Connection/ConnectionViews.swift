@@ -45,6 +45,7 @@ struct LoginScreen: View {
                   if connection.server.url.scheme == "http" {
                     address = connection.server.url.absoluteString
                     username = connection.username
+                    selectedConnection = connection
                   } else {
                     Task { await store.activate(connection) }
                   }
@@ -102,6 +103,10 @@ struct ConnectionDetails: View {
           }
         } header: {
           Text("Server address")
+        } footer: {
+          if connection.server.url.scheme == "http" {
+            Text("This saved address uses HTTP. Use your server’s HTTPS address to sign in.")
+          }
         }
         Section("App build") {
           Text(

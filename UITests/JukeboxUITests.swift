@@ -3673,11 +3673,20 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(address.waitForExistence(timeout: 4))
     XCTAssertEqual(address.label, "http://offline.invalid/music")
     XCTAssertEqual(app.staticTexts["connection-username"].label, "Offline listener")
+    XCTAssertTrue(
+      app.staticTexts["This saved address uses HTTP. Use your server’s HTTPS address to sign in."]
+        .exists)
     XCTAssertTrue(app.buttons["Copy server address"].isHittable)
     XCTAssertFalse(app.buttons["transport-start"].exists)
     app.buttons["Done"].tap()
     XCTAssertTrue(details.waitForExistence(timeout: 4))
-    XCTAssertTrue(app.textFields["Server address"].exists)
+    app.buttons["Offline listener"].tap()
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    app.buttons["Done"].tap()
+    let field = app.textFields["Server address"]
+    XCTAssertTrue(field.waitForExistence(timeout: 4))
+    XCTAssertEqual(field.value as? String, "http://offline.invalid/music")
+    XCTAssertEqual(app.textFields["Username"].value as? String, "Offline listener")
     XCTAssertFalse(app.buttons["Connect"].isEnabled)
   }
   @MainActor func testActiveConnectionDetailsAtLargeText() throws {

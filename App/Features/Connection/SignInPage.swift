@@ -93,17 +93,24 @@ extension View {
 }
 
 private struct CredentialInput: UIViewRepresentable {
-  enum Kind { case username, password }
-  let kind: Kind
-  @Binding var text: String
-  @Binding var focused: Kind?
+  enum Purpose {
+    case username(Binding<String>)
+    case password
+  }
+
+  final class Fields {
+    weak var username: UITextField?
+    weak var password: UITextField?
+  }
+
+  let purpose: Purpose
+  let fields: Fields
   let submit: () -> Void
   @Environment(\.isEnabled) private var enabled
 
-  init(_ kind: Kind, text: Binding<String>, focused: Binding<Kind?>, submit: @escaping () -> Void) {
-    self.kind = kind
-    _text = text
-    _focused = focused
+  init(_ purpose: Purpose, fields: Fields, submit: @escaping () -> Void) {
+    self.purpose = purpose
+    self.fields = fields
     self.submit = submit
   }
 
@@ -114,22 +121,36 @@ private struct CredentialInput: UIViewRepresentable {
     override func editingRect(forBounds bounds: CGRect) -> CGRect {
       super.editingRect(forBounds: bounds.insetBy(dx: 14, dy: 0))
     }
+    override func layoutSubviews() {
+      super.layoutSubviews()
+      let color = UIColor(isFirstResponder ? MusicUI.tint : MusicUI.border)
+      layer.borderColor = color.resolvedColor(with: traitCollection).cgColor
+      layer.borderWidth = isFirstResponder ? 2 : 1
+    }
+    @objc func focusOnTap() {
+      if isEnabled, !isFirstResponder { becomeFirstResponder() }
+    }
   }
 
-  final class Coordinator: NSObject, UITextFieldDelegate {
+  final class Coordinator: NSObject, UITextFieldDelegate, UIGestureRecognizerDelegate {
     var input: CredentialInput
     init(_ input: CredentialInput) { self.input = input }
-    @objc func changed(_ field: UITextField) { input.text = field.text ?? "" }
-    func textFieldDidBeginEditing(_ field: UITextField) {
-      if input.focused != input.kind { input.focused = input.kind }
+    @objc func changed(_ field: UITextField) {
+      if case .username(let binding) = input.purpose { binding.wrappedValue = field.text ?? "" }
     }
-    func textFieldDidEndEditing(_ field: UITextField) {
-      if input.focused == input.kind { input.focused = nil }
-    }
+    func textFieldDidBeginEditing(_ field: UITextField) { field.setNeedsLayout() }
+    func textFieldDidEndEditing(_ field: UITextField) { field.setNeedsLayout() }
     func textFieldShouldReturn(_ field: UITextField) -> Bool {
-      input.submit()
+      switch input.purpose {
+      case .username: input.fields.password?.becomeFirstResponder()
+      case .password: input.submit()
+      }
       return false
     }
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool { true }
   }
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -141,27 +162,43 @@ private struct CredentialInput: UIViewRepresentable {
     field.autocorrectionType = .no
     field.autocapitalizationType = .none
     field.spellCheckingType = .no
-    field.isSecureTextEntry = kind == .password
-    field.textContentType = kind == .password ? .password : .username
-    field.returnKeyType = kind == .password ? .go : .next
-    field.placeholder =
-      kind == .password ? String(localized: "Password") : String(localized: "Username")
+    field.backgroundColor = UIColor(MusicUI.panel)
+    field.layer.cornerRadius = 13
+    field.layer.cornerCurve = .continuous
+    switch purpose {
+    case .username(let username):
+      fields.username = field
+      field.text = username.wrappedValue
+      field.textContentType = .username
+      field.returnKeyType = .next
+      field.placeholder = String(localized: "Username")
+      field.accessibilityIdentifier = "sign-in-username"
+      field.addTarget(
+        context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+    case .password:
+      fields.password = field
+      field.isSecureTextEntry = true
+      field.textContentType = .password
+      field.returnKeyType = .go
+      field.placeholder = String(localized: "Password")
+      field.accessibilityIdentifier = "sign-in-password"
+    }
     field.accessibilityLabel = field.placeholder
-    field.accessibilityIdentifier = kind == .password ? "sign-in-password" : "sign-in-username"
     field.delegate = context.coordinator
-    field.addTarget(
-      context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+    let tap = UITapGestureRecognizer(target: field, action: #selector(Input.focusOnTap))
+    tap.cancelsTouchesInView = false
+    tap.delegate = context.coordinator
+    field.addGestureRecognizer(tap)
     return field
   }
 
   func updateUIView(_ field: Input, context: Context) {
     context.coordinator.input = self
-    if field.text != text { field.text = text }
     field.isEnabled = enabled
-    if focused == kind, enabled, !field.isFirstResponder, field.window != nil {
-      field.becomeFirstResponder()
-    } else if focused == nil, field.isFirstResponder {
-      field.resignFirstResponder()
+    if case .username(let username) = purpose, !field.isFirstResponder,
+      field.text != username.wrappedValue
+    {
+      field.text = username.wrappedValue
     }
   }
 
@@ -206,9 +243,13 @@ struct PasswordSignIn: View {
   let server: ServerAddress
   let codesDisabled: Bool
   @Binding var username: String
-  @State private var password = ""
-  @State private var submitting = false
-  @State private var field: CredentialInput.Kind?
+  private struct Submission {
+    let username: String
+    let password: String
+  }
+  @State private var fields = CredentialInput.Fields()
+  @State private var submission: Submission?
+  private var submitting: Bool { submission != nil }
 
   var body: some View {
     SignInPage("Sign in with a password") {
@@ -219,12 +260,12 @@ struct PasswordSignIn: View {
       Text("Use your Jellyfin account on \(server.url.absoluteString).").foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 6) {
         Text("Username").font(.subheadline.weight(.semibold))
-        CredentialInput(.username, text: $username, focused: $field) { field = .password }
-          .frame(maxWidth: .infinity).signInFieldSurface(focused: field == .username)
+        CredentialInput(.username($username), fields: fields, submit: submit)
+          .frame(maxWidth: .infinity)
         Text("Password").font(.subheadline.weight(.semibold)).padding(.top, 8)
         HStack(spacing: 4) {
-          CredentialInput(.password, text: $password, focused: $field, submit: submit)
-            .frame(maxWidth: .infinity).signInFieldSurface(focused: field == .password)
+          CredentialInput(.password, fields: fields, submit: submit)
+            .frame(maxWidth: .infinity)
           SignInForward(
             title: submitting ? "Signing in…" : "Sign in", busy: submitting, action: submit
           )
@@ -240,17 +281,22 @@ struct PasswordSignIn: View {
       }
     }
     .task(id: submitting) {
-      guard submitting else { return }
-      let secret = password
-      password = ""
-      await store.signIn(address: server.url.absoluteString, username: username, password: secret)
-      submitting = false
+      guard let submission else { return }
+      await store.signIn(
+        address: server.url.absoluteString, username: submission.username,
+        password: submission.password)
+      self.submission = nil
     }
   }
 
   private func submit() {
-    guard !submitting, !store.busy, !username.isEmpty, store.pendingSignOut == nil else { return }
-    field = nil
-    submitting = true
+    guard !submitting, !store.busy, store.pendingSignOut == nil,
+      let usernameField = fields.username, let name = usernameField.text, !name.isEmpty,
+      let passwordField = fields.password
+    else { return }
+    submission = Submission(username: name, password: passwordField.text ?? "")
+    passwordField.text = nil
+    if usernameField.isFirstResponder { usernameField.resignFirstResponder() }
+    if passwordField.isFirstResponder { passwordField.resignFirstResponder() }
   }
 }

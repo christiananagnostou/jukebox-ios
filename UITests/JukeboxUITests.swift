@@ -3691,6 +3691,14 @@ final class JukeboxUITests: XCTestCase {
     expecting value: String? = nil,
     verticalOffset: CGFloat = 0
   ) async throws {
+    try await tapAccountField(field, in: app, verticalOffset: verticalOffset)
+    app.typeText(text)
+    if let value { XCTAssertEqual(field.value as? String, value) }
+  }
+
+  @MainActor private func tapAccountField(
+    _ field: XCUIElement, in app: XCUIApplication, verticalOffset: CGFloat
+  ) async throws {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(5))
     var previousFrame = CGRect.null
@@ -3699,8 +3707,6 @@ final class JukeboxUITests: XCTestCase {
       if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
           .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
-        app.typeText(text)
-        if let value { XCTAssertEqual(field.value as? String, value) }
         return
       }
       previousFrame = frame
@@ -3820,24 +3826,22 @@ final class JukeboxUITests: XCTestCase {
     let keyboardEdgeColor = try screenColor(
       keyboardImage, screen: screen, xOffset: password.frame.midX - screen.minX,
       y: password.frame.minY + 4)
-    try await typeAccountText("fixture", into: password, in: app, verticalOffset: -22)
-    if username.value as? String != "Listener" {
-      let valueAfterEdge = username.value as? String
-      password.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 4 / fieldFrame.height)).tap()
-      app.typeText("a")
-      let valueAfterSecondEdge = username.value as? String
-      password.tap()
-      app.typeText("b")
-      let edgeChangedUsername = valueAfterEdge != valueAfterSecondEdge
-      let centerChangedUsername = valueAfterSecondEdge != (username.value as? String)
-      XCTFail(
-        "The first password tap sent text to Username. A second edge tap changed Username: \(edgeChangedUsername). A center tap changed Username: \(centerChangedUsername). Field edge RGB before/after the keyboard: \(fieldEdgeColor)/\(keyboardEdgeColor)."
-      )
-      return
-    }
+    try await tapAccountField(password, in: app, verticalOffset: -22)
+    let tapped = try XCTUnwrap(app.screenshot().image.cgImage)
+    let passwordBorder = try screenColor(
+      tapped, screen: screen, xOffset: password.frame.midX - screen.minX, y: password.frame.minY + 1
+    )
+    let usernameBorder = try screenColor(
+      tapped, screen: screen, xOffset: username.frame.midX - screen.minX, y: username.frame.minY + 1
+    )
+    app.typeText("fixture")
+    XCTAssertTrue((username.value as? String) == "Listener", "Password input changed Username")
     submit.tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
-    XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+    XCTAssertTrue(
+      accounts.waitForExistence(timeout: 10),
+      "Password edge RGB before/after the keyboard \(fieldEdgeColor)/\(keyboardEdgeColor). Username/password focus borders after the tap \(usernameBorder)/\(passwordBorder)."
+    )
     openAccountAction("Connection details", in: app)
     XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
     XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)

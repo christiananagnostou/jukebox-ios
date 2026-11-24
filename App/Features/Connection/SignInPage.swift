@@ -36,13 +36,14 @@ struct SignInForward: View {
     Button(action: action) {
       Group {
         if busy {
-          ProgressView().tint(MusicUI.tint)
+          ProgressView().tint(MusicUI.onTint)
         } else {
-          Image(systemName: "arrow.forward.circle.fill").font(.title)
-            .foregroundStyle(MusicUI.tint)
+          Image(systemName: "arrow.forward").font(.title3.weight(.semibold))
+            .foregroundStyle(MusicUI.onTint)
         }
       }
-      .frame(minWidth: SignInControl.height, minHeight: SignInControl.height)
+      .frame(width: SignInControl.height, height: SignInControl.height)
+      .background(MusicUI.tint, in: .circle)
       .contentShape(.rect)
     }
     .buttonStyle(MusicButtonStyle()).accessibilityLabel(Text(title))
@@ -72,9 +73,9 @@ extension View {
     return textFieldStyle(.plain)
       .padding(.horizontal, 14).padding(.vertical, 12)
       .frame(maxWidth: .infinity, minHeight: SignInControl.height, alignment: .leading)
-      .background {
-        shape.fill(MusicUI.panel).onTapGesture(perform: focus).accessibilityHidden(true)
-      }
+      .background(MusicUI.panel, in: shape)
+      .contentShape(.rect)
+      .simultaneousGesture(TapGesture().onEnded { focus() })
       .overlay {
         shape.strokeBorder(focused ? MusicUI.tint : MusicUI.border, lineWidth: focused ? 2 : 1)
           .allowsHitTesting(false).accessibilityHidden(true)
@@ -141,11 +142,14 @@ struct PasswordSignIn: View {
           )
           .submitLabel(.next).onSubmit { field = .password }
           .signInField(focused: field == .username) { field = .username }
+          .accessibilityIdentifier("sign-in-username")
         Text("Password").font(.subheadline.weight(.semibold)).padding(.top, 8)
         HStack(spacing: 4) {
           SecureField("Password", text: $password).textContentType(.password)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
             .focused($field, equals: .password).submitLabel(.go).onSubmit(submit)
             .signInField(focused: field == .password) { field = .password }
+            .accessibilityIdentifier("sign-in-password")
           SignInForward(
             title: submitting ? "Signing in…" : "Sign in", busy: submitting, action: submit
           )

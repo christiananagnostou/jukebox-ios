@@ -6,6 +6,7 @@ enum TransportControlLaunch {
     case run(UUID)
     case cleanup(UUID)
     case interactive(UUID)
+    case accountSignIn
   #endif
   init(arguments: [String]) {
     let flags = arguments.filter { $0.hasPrefix("--transport-") }
@@ -14,6 +15,14 @@ enum TransportControlLaunch {
       return
     }
     #if DEBUG
+      if flags.count == 1, flags[0].hasPrefix("--transport-account-sign-in=") {
+        let argument = flags[0]
+        let id = UUID(uuidString: String(argument.dropFirst("--transport-account-sign-in=".count)))
+        self =
+          arguments.count == 2 && arguments.contains("--muted") && id != nil
+          ? .accountSignIn : .rejected
+        return
+      }
       guard flags.count == 1, arguments.filter({ $0 == "--fixture" }).count == 1,
         !arguments.contains(where: {
           $0 == "--integration" || $0 == "--connect" || $0.hasPrefix("--profile-")
@@ -54,7 +63,7 @@ enum TransportControlLaunch {
     var runID: UUID? {
       switch self {
       case .run(let id), .cleanup(let id): id
-      case .absent, .rejected, .interactive: nil
+      case .absent, .rejected, .interactive, .accountSignIn: nil
       }
     }
   #endif

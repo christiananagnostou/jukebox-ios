@@ -224,6 +224,8 @@ import SwiftUI
               await TransportAcceptance.run(
                 runID: runID, store: store, native: engine, vault: vaultForAcceptance,
                 fixture: fixture)
+            case .accountSignIn:
+              await store.bootstrap(autoConnect: false)
             case .interactive:
               if arguments.contains("--quick-connect-fixture") {
                 await store.bootstrap(autoConnect: false)

@@ -310,6 +310,26 @@ final class TransportControlEntryTests: XCTestCase {
       #endif
     }
   }
+  func testLiveAccountCheckStartsWithFreshStorageAndCannotBeCombinedWithFixtures() {
+    let flag = "--transport-account-sign-in=" + UUID().uuidString
+    let live = TransportControlLaunch(arguments: [flag, "--muted"])
+    XCTAssertTrue(live.startup(normal: { false }, isolated: { true }))
+    #if DEBUG
+      guard case .accountSignIn = live else { return XCTFail("Expected isolated sign-in") }
+      XCTAssertNil(live.runID)
+    #else
+      guard case .rejected = live else { return XCTFail("Release admitted a test launch") }
+    #endif
+    for flags in [
+      [flag], [flag, "--muted", "--fixture"], [flag, "--muted", "--connect"],
+      ["--transport-account-sign-in=invalid", "--muted"],
+    ] {
+      guard case .rejected = TransportControlLaunch(arguments: flags) else {
+        return XCTFail("Malformed or mixed account-check arguments")
+      }
+    }
+  }
+
   func testInteractiveEntrySelectsOnlyIsolatedDependenciesAndOwnsNoTransportFiles() {
     let id = "00000000-0000-0000-0000-000000000001"
     let arguments = ["--fixture", "--muted", "--transport-ui=" + id]

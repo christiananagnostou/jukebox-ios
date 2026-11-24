@@ -131,7 +131,7 @@ struct JellyfinAuthentication: Sendable {
     var failures = 0
     while ContinuousClock.now < deadline {
       try await Task.sleep(
-        until: min(.now.advanced(by: pollInterval), deadline), clock: .continuous)
+        until: min(ContinuousClock.now.advanced(by: pollInterval), deadline), clock: .continuous)
       try Task.checkCancellation()
       guard ContinuousClock.now < deadline else { break }
       let state: HTTPReply

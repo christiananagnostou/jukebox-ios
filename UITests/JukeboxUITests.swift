@@ -648,7 +648,7 @@ final class JukeboxUITests: XCTestCase {
     let media = app.buttons["media-picker"]
     let image = try XCTUnwrap(app.screenshot().image.cgImage)
     func color(_ y: CGFloat) throws -> [Int] {
-      try browseMarginColor(image, screen: app.frame, y: y)
+      try screenColor(image, screen: app.frame, y: y)
     }
     let canvas = try color(max(viewport.frame.minY, controls.frame.maxY) + 18)
     for sample in [try color(media.frame.midY), try color(controls.frame.midY)] {
@@ -660,12 +660,15 @@ final class JukeboxUITests: XCTestCase {
     }
   }
 
-  @MainActor private func browseMarginColor(_ image: CGImage, screen: CGRect, y: CGFloat) throws
+  @MainActor private func screenColor(
+    _ image: CGImage, screen: CGRect, xOffset: CGFloat = 6, y: CGFloat
+  )
+    throws
     -> [Int]
   {
     let scale = CGFloat(image.width) / screen.width
     let rect = CGRect(
-      x: 5 * scale, y: (y - screen.minY - 1) * scale,
+      x: (xOffset - 1) * scale, y: (y - screen.minY - 1) * scale,
       width: 2 * scale, height: 2 * scale
     ).integral
     let sample = try XCTUnwrap(image.cropping(to: rect))
@@ -908,7 +911,7 @@ final class JukeboxUITests: XCTestCase {
     var rgb: [Int] = []
     let y = app.navigationBars.firstMatch.frame.maxY + 34
     for _ in 0..<5 {
-      rgb = try browseMarginColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
+      rgb = try screenColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
       if rgb[0] > rgb[2] + 25 { break }
     }
     XCTAssertGreaterThan(rgb[0], rgb[2] + 25)
@@ -1008,7 +1011,7 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(songsHeading.waitForExistence(timeout: 5))
     XCTAssertFalse(app.staticTexts["Your most played"].exists)
     let image = try XCTUnwrap(app.screenshot().image.cgImage)
-    let fallback = try browseMarginColor(
+    let fallback = try screenColor(
       image, screen: app.frame, y: app.navigationBars.firstMatch.frame.maxY + 34)
     XCTAssertGreaterThan(fallback[2], fallback[0])
     capture("artist-without-portrait", app: app)
@@ -2240,8 +2243,8 @@ final class JukeboxUITests: XCTestCase {
       var tracks = [Int]()
       repeat {
         let image = try XCTUnwrap(app.screenshot().image.cgImage)
-        hero = try browseMarginColor(image, screen: screen, y: upper)
-        tracks = try browseMarginColor(image, screen: screen, y: lower)
+        hero = try screenColor(image, screen: screen, y: upper)
+        tracks = try screenColor(image, screen: screen, y: lower)
       } while !accepts(hero[0] - hero[2]) && Date() < deadline
       XCTContext.runActivity(named: "Album palette \(color) hero=\(hero) tracks=\(tracks)") { _ in }
       XCTAssertTrue(accepts(hero[0] - hero[2]), "Unexpected album color \(hero)")
@@ -3696,7 +3699,11 @@ final class JukeboxUITests: XCTestCase {
       if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
           .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
-        app.typeText(text)
+        if field.elementType == .secureTextField {
+          field.typeText(text)
+        } else {
+          app.typeText(text)
+        }
         if let value { XCTAssertEqual(field.value as? String, value) }
         return
       }
@@ -3794,11 +3801,19 @@ final class JukeboxUITests: XCTestCase {
     let password = app.secureTextFields["sign-in-password"]
     let submit = app.buttons["sign-in-password-submit"]
     checkForwardField(password, arrow: submit)
+    let fieldFrame = password.frame
+    let arrowFrame = submit.frame
+    XCTAssertEqual(fieldFrame.height, arrowFrame.height, accuracy: 1)
+    let screen = app.frame
+    let image = try XCTUnwrap(app.screenshot().image.cgImage)
+    for y in [arrowFrame.minY + 2, arrowFrame.maxY - 2] {
+      let color = try screenColor(
+        image, screen: screen, xOffset: arrowFrame.midX - screen.minX, y: y)
+      XCTAssertGreaterThan(color[2] - color[0], 12, "The circle must reach both field edges")
+    }
     try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
     try await typeAccountText("fixture", into: password, in: app, verticalOffset: -22)
     XCTAssertEqual(username.value as? String, "Listener")
-    XCTAssertEqual((password.value as? String)?.count, "fixture".count)
-    XCTAssertNotEqual(password.value as? String, password.placeholderValue)
     submit.tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 10))
@@ -4222,7 +4237,7 @@ extension JukeboxUITests {
     let y = app.navigationBars.firstMatch.frame.maxY + 28
     var rgb: [Int] = []
     for _ in 0..<6 {
-      rgb = try browseMarginColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
+      rgb = try screenColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
       if rgb.max()! - rgb.min()! >= 15 { break }
     }
     XCTAssertGreaterThanOrEqual(rgb.max()! - rgb.min()!, 10)

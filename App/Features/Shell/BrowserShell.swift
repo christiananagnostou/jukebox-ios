@@ -152,11 +152,15 @@ struct BrowserShell: View {
       }
     }
     .sheet(item: $accountSheet) { sheet in
-      if store.active?.id == sheet.account.id {
-        switch sheet {
-        case .details(let account): ConnectionDetails(store: store, connection: account)
-        case .quickConnect(let account): QuickConnectApproval(store: store, account: account)
+      switch sheet {
+      case .details(let account):
+        if store.active?.id == account.id
+          || store.connections.contains(where: { $0.id == account.id })
+        {
+          ConnectionDetails(store: store, connection: account)
         }
+      case .quickConnect(let account):
+        if store.active?.id == account.id { QuickConnectApproval(store: store, account: account) }
       }
     }
     .sheet(isPresented: $store.showPlayer) {
@@ -328,7 +332,12 @@ struct BrowserShell: View {
         if browser.scope == owner, browser.metadataIsCurrent {
           PlaylistDetailView(
             store: store, browser: browser, scope: owner, playlist: playlist, canvas: canvas
-          )
+          ) { copy in
+            guard tab == selectedTab, activePath.wrappedValue.last == route,
+              browser.scope == owner, browser.playlistIndex.permitsOpening(copy.id)
+            else { return }
+            append(.playlist(copy, scope: owner))
+          }
           .id(route)
         }
       case .artistCatalog(let route, let category):

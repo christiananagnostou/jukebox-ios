@@ -169,7 +169,7 @@ import SwiftUI
     let accountFixture: (any HTTPTransport)?
     #if DEBUG
       if case .interactive = transport, args.contains("--quick-connect-fixture") {
-        accountFixture = QuickConnectFixtureHTTP()
+        accountFixture = QuickConnectFixtureHTTP(codesEnabled: !args.contains("--codes-disabled"))
       } else {
         accountFixture = nil
       }
@@ -198,7 +198,8 @@ import SwiftUI
         ? .seconds(5) : nil,
       catalogSongLimit: fixtureMode && args.contains("--window-fixture") ? 160 : nil,
       singleLibrary: fixtureMode && args.contains("--single-library"),
-      longAlbum: fixtureMode && args.contains("--long-album"))
+      longAlbum: fixtureMode && args.contains("--long-album"),
+      readOnlyMix: fixtureMode && args.contains("--read-only-mix"))
     fixture = catalogFixture
     profiling =
       startup.3
@@ -223,9 +224,16 @@ import SwiftUI
               await TransportAcceptance.run(
                 runID: runID, store: store, native: engine, vault: vaultForAcceptance,
                 fixture: fixture)
+            case .accountSignIn:
+              await store.bootstrap(autoConnect: false)
             case .interactive:
               if arguments.contains("--quick-connect-fixture") {
-                await store.bootstrap(autoConnect: false)
+                let useSaved = arguments.contains("--example-saved-connections")
+                if useSaved {
+                  try? await QuickConnectFixtureHTTP.saveExampleConnections(
+                    to: storageForAcceptance, vault: vaultForAcceptance)
+                }
+                await store.bootstrap(autoConnect: useSaved)
               } else if arguments.contains("--saved-account-fixture") {
                 if let server = try? ServerAddress("http://offline.invalid/music") {
                   let account = Connection(

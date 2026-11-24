@@ -1,4 +1,5 @@
 import UIKit
+import Vision
 import XCTest
 
 final class JukeboxUITests: XCTestCase {
@@ -636,7 +637,7 @@ final class JukeboxUITests: XCTestCase {
       app.terminate()
       app.launchArguments = ["--connect"]
       app.launch()
-      XCTAssertTrue(app.textFields["Server address"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.textFields["sign-in-server"].waitForExistence(timeout: 5))
       capture(large ? "connect-shared-accessibility" : "connect-shared-surface", app: app)
       app.terminate()
     }
@@ -648,7 +649,7 @@ final class JukeboxUITests: XCTestCase {
     let media = app.buttons["media-picker"]
     let image = try XCTUnwrap(app.screenshot().image.cgImage)
     func color(_ y: CGFloat) throws -> [Int] {
-      try browseMarginColor(image, screen: app.frame, y: y)
+      try screenColor(image, screen: app.frame, y: y)
     }
     let canvas = try color(max(viewport.frame.minY, controls.frame.maxY) + 18)
     for sample in [try color(media.frame.midY), try color(controls.frame.midY)] {
@@ -660,12 +661,15 @@ final class JukeboxUITests: XCTestCase {
     }
   }
 
-  @MainActor private func browseMarginColor(_ image: CGImage, screen: CGRect, y: CGFloat) throws
+  @MainActor private func screenColor(
+    _ image: CGImage, screen: CGRect, xOffset: CGFloat = 6, y: CGFloat
+  )
+    throws
     -> [Int]
   {
     let scale = CGFloat(image.width) / screen.width
     let rect = CGRect(
-      x: 5 * scale, y: (y - screen.minY - 1) * scale,
+      x: (xOffset - 1) * scale, y: (y - screen.minY - 1) * scale,
       width: 2 * scale, height: 2 * scale
     ).integral
     let sample = try XCTUnwrap(image.cropping(to: rect))
@@ -908,7 +912,7 @@ final class JukeboxUITests: XCTestCase {
     var rgb: [Int] = []
     let y = app.navigationBars.firstMatch.frame.maxY + 34
     for _ in 0..<5 {
-      rgb = try browseMarginColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
+      rgb = try screenColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
       if rgb[0] > rgb[2] + 25 { break }
     }
     XCTAssertGreaterThan(rgb[0], rgb[2] + 25)
@@ -1008,7 +1012,7 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(songsHeading.waitForExistence(timeout: 5))
     XCTAssertFalse(app.staticTexts["Your most played"].exists)
     let image = try XCTUnwrap(app.screenshot().image.cgImage)
-    let fallback = try browseMarginColor(
+    let fallback = try screenColor(
       image, screen: app.frame, y: app.navigationBars.firstMatch.frame.maxY + 34)
     XCTAssertGreaterThan(fallback[2], fallback[0])
     capture("artist-without-portrait", app: app)
@@ -2240,8 +2244,8 @@ final class JukeboxUITests: XCTestCase {
       var tracks = [Int]()
       repeat {
         let image = try XCTUnwrap(app.screenshot().image.cgImage)
-        hero = try browseMarginColor(image, screen: screen, y: upper)
-        tracks = try browseMarginColor(image, screen: screen, y: lower)
+        hero = try screenColor(image, screen: screen, y: upper)
+        tracks = try screenColor(image, screen: screen, y: lower)
       } while !accepts(hero[0] - hero[2]) && Date() < deadline
       XCTContext.runActivity(named: "Album palette \(color) hero=\(hero) tracks=\(tracks)") { _ in }
       XCTAssertTrue(accepts(hero[0] - hero[2]), "Unexpected album color \(hero)")
@@ -3643,15 +3647,11 @@ final class JukeboxUITests: XCTestCase {
     app.launch()
     defer { app.terminate() }
     let tabs = app.tabBars.firstMatch
-    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     for title in ["Home", "Library", "Search"] {
       let tab = tabs.buttons[title]
       XCTAssertTrue(tab.waitForExistence(timeout: 8))
       tab.tap()
-      XCTAssertTrue(accounts.waitForExistence(timeout: 5))
-      XCTAssertTrue(accounts.isHittable)
-      accounts.tap()
-      app.buttons["Connection details"].tap()
+      openAccountAction("Connection details", in: app)
       let address = app.staticTexts["connection-server-address"]
       XCTAssertTrue(address.waitForExistence(timeout: 4))
       XCTAssertEqual(address.label, "https://fixture.invalid")
@@ -3661,6 +3661,60 @@ final class JukeboxUITests: XCTestCase {
       XCTAssertTrue(tab.isSelected)
     }
   }
+  @MainActor private func openAccountAction(_ title: String, in app: XCUIApplication) {
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    let action = app.buttons[title]
+    XCTAssertTrue(accounts.waitForExistence(timeout: 8))
+    for _ in 0..<2 {
+      accounts.tap()
+      if action.waitForExistence(timeout: 5) {
+        action.tap()
+        return
+      }
+    }
+    XCTFail("The Accounts menu did not present \(title)")
+  }
+  @MainActor private func checkForwardField(_ field: XCUIElement, arrow: XCUIElement) {
+    let input = field.frame
+    let button = arrow.frame
+    XCTContext.runActivity(named: "Input and forward arrow \(input) \(button)") { _ in
+      XCTAssertGreaterThanOrEqual(button.width, 44)
+      XCTAssertLessThanOrEqual(button.width, 64)
+      XCTAssertGreaterThanOrEqual(button.height, 48)
+      XCTAssertEqual(button.midY, input.midY, accuracy: 2)
+      XCTAssertGreaterThanOrEqual(button.minX, input.maxX - 1)
+      XCTAssertGreaterThan(input.width, button.width * 2)
+    }
+  }
+
+  @MainActor private func typeAccountText(
+    _ text: String, into field: XCUIElement, in app: XCUIApplication,
+    expecting value: String? = nil,
+    verticalOffset: CGFloat = 0
+  ) async throws {
+    try await tapAccountField(field, in: app, verticalOffset: verticalOffset)
+    app.typeText(text)
+    if let value { XCTAssertEqual(field.value as? String, value) }
+  }
+
+  @MainActor private func tapAccountField(
+    _ field: XCUIElement, in app: XCUIApplication, verticalOffset: CGFloat
+  ) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    var previousFrame = CGRect.null
+    while clock.now < deadline {
+      let frame = field.frame
+      if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+          .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
+        return
+      }
+      previousFrame = frame
+      try await Task.sleep(for: .milliseconds(180))
+    }
+    XCTFail("The text field did not settle inside the app window")
+  }
   @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() async throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -3669,29 +3723,21 @@ final class JukeboxUITests: XCTestCase {
     ]
     app.launch()
     defer { app.terminate() }
-    func type(_ text: String, into field: XCUIElement, expecting value: String) async throws {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(5))
-      var previousFrame = CGRect.null
-      while clock.now < deadline {
-        let frame = field.frame
-        if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
-          field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-          app.typeText(text)
-          XCTAssertEqual(field.value as? String, value)
-          return
-        }
-        previousFrame = frame
-        try await Task.sleep(for: .milliseconds(180))
-      }
-      XCTFail("The text field did not settle inside the app window")
-    }
-    let address = app.textFields["Server address"]
-    let start = app.buttons["Sign in with Quick Connect"]
+    let address = app.textFields["sign-in-server"]
+    let next = app.buttons["sign-in-continue"]
+    let start = app.buttons["sign-in-show-code"]
     XCTAssertTrue(address.waitForExistence(timeout: 8))
-    XCTAssertFalse(start.isEnabled)
+    XCTAssertFalse(next.isEnabled)
+    XCTAssertFalse(start.exists)
+    XCTAssertFalse(app.secureTextFields.firstMatch.exists)
+    checkForwardField(address, arrow: next)
     let url = "https://music.invalid/jellyfin"
-    try await type(url, into: address, expecting: url)
+    try await typeAccountText(url, into: address, in: app, expecting: url, verticalOffset: -22)
+    next.tap()
+    XCTAssertTrue(start.waitForExistence(timeout: 8))
+    XCTAssertEqual(start.label, "Show a sign-in code")
+    XCTAssertGreaterThanOrEqual(start.frame.height, 44)
+    XCTAssertTrue(app.buttons["sign-in-password-method"].exists)
     start.tap()
     let code = app.staticTexts["quick-connect-code"]
     XCTAssertTrue(code.waitForExistence(timeout: 5))
@@ -3699,24 +3745,27 @@ final class JukeboxUITests: XCTestCase {
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(start.waitForExistence(timeout: 5))
     XCTAssertTrue(start.wait(for: \.isEnabled, toEqual: true, timeout: 5))
-    XCTAssertEqual(address.value as? String, url)
+    XCTAssertEqual(
+      app.descendants(matching: .any).matching(identifier: "sign-in-method-server").firstMatch
+        .label, url)
     start.tap()
     XCTAssertTrue(code.waitForExistence(timeout: 5))
     XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 22))
     XCTAssertTrue(accounts.isHittable)
-    accounts.tap()
-    app.buttons["Quick Connect"].tap()
+    openAccountAction("Quick Connect", in: app)
     let field = app.textFields["quick-connect-input"]
-    let approve = app.buttons["Approve sign-in"]
+    let approve = app.buttons["quick-connect-submit"]
     XCTAssertTrue(field.waitForExistence(timeout: 5))
+    XCTAssertEqual(approve.label, "Approve")
+    XCTAssertGreaterThanOrEqual(approve.frame.height, 44)
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
         NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
       ).firstMatch.exists)
     XCTAssertFalse(approve.isEnabled)
-    try await type("999999", into: field, expecting: "999999")
+    try await typeAccountText("999999", into: field, in: app, expecting: "999999")
     XCTAssertTrue(approve.isEnabled)
     approve.tap()
     let error = app.descendants(matching: .any).matching(identifier: "quick-connect-approval-error")
@@ -3724,7 +3773,7 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(error.waitForExistence(timeout: 5))
     XCTAssertTrue(error.label.contains("invalid or has expired"))
     let clear = String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6)
-    try await type(clear + "246810", into: field, expecting: "246810")
+    try await typeAccountText(clear + "246810", into: field, in: app, expecting: "246810")
     XCTAssertTrue(approve.isEnabled)
     let success = app.descendants(matching: .any).matching(identifier: "quick-connect-approved")
       .firstMatch
@@ -3734,6 +3783,354 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(accounts.waitForExistence(timeout: 5))
   }
+  @MainActor private func openPasswordFixture(in app: XCUIApplication) async throws -> String {
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--quick-connect-fixture", "--codes-disabled",
+    ]
+    app.launch()
+    let address = app.textFields["sign-in-server"]
+    XCTAssertTrue(address.waitForExistence(timeout: 8))
+    XCTAssertFalse(app.textFields["Username"].exists)
+    let url = "https://music.invalid/jellyfin"
+    try await typeAccountText(url, into: address, in: app, expecting: url, verticalOffset: 22)
+    app.buttons["sign-in-continue"].tap()
+    XCTAssertTrue(app.staticTexts["sign-in-codes-disabled"].waitForExistence(timeout: 6))
+    XCTAssertFalse(app.buttons["sign-in-show-code"].exists)
+    return url
+  }
+
+  @MainActor func testFirstDeviceSignsInWithPasswordWhenCodesAreDisabled() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    let password = app.secureTextFields["sign-in-password"]
+    let submit = app.buttons["sign-in-password-submit"]
+    checkForwardField(password, arrow: submit)
+    let fieldFrame = password.frame
+    let arrowFrame = submit.frame
+    XCTAssertEqual(fieldFrame.height, arrowFrame.height, accuracy: 1)
+    let screen = app.frame
+    let image = try XCTUnwrap(app.screenshot().image.cgImage)
+    for y in [arrowFrame.minY + 2, arrowFrame.maxY - 2] {
+      let color = try screenColor(
+        image, screen: screen, xOffset: arrowFrame.midX - screen.minX, y: y)
+      XCTAssertGreaterThan(color[2] - color[0], 12, "The circle must reach both field edges")
+    }
+    try await typeAccountText(
+      "Listener", into: username, in: app, expecting: "Listener", verticalOffset: 22)
+    dismissCredentialSuggestions(in: app)
+    password.tap()
+    try recordPasswordFocus(password, in: app)
+    password.typeText("fixture")
+    XCTAssertTrue((username.value as? String) == "Listener", "Password input changed Username")
+    submit.tap()
+    assertPasswordFixtureAccount(in: app, server: url)
+  }
+
+  @MainActor private func recordPasswordFocus(
+    _ password: XCUIElement, in app: XCUIApplication
+  ) throws {
+    let screen = app.frame
+    let frame = password.frame
+    let image = try XCTUnwrap(app.screenshot().image.cgImage)
+    let border = try screenColor(
+      image, screen: screen, xOffset: frame.midX - screen.minX, y: frame.minY + 1)
+    XCTContext.runActivity(named: "Password focus border \(border)") { _ in }
+  }
+
+  @MainActor private func dismissCredentialSuggestions(in app: XCUIApplication) {
+    let bar = app.navigationBars.firstMatch
+    XCTAssertTrue(bar.waitForExistence(timeout: 5))
+    bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+  }
+
+  @MainActor private func passwordEdgeColors(
+    _ password: XCUIElement, in app: XCUIApplication
+  ) throws -> [Int] {
+    let screen = app.frame
+    let frame = password.frame
+    let image = try XCTUnwrap(app.screenshot().image.cgImage)
+    let fractions: [CGFloat] = [0.25, 0.5, 0.75]
+    return try fractions.flatMap { fraction in
+      try screenColor(
+        image, screen: screen, xOffset: frame.minX - screen.minX + frame.width * fraction,
+        y: frame.minY + 4)
+    }
+  }
+
+  @MainActor func testPasswordCenterEdgeWithKeyboardAlreadyOpen() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    let password = app.secureTextFields["sign-in-password"]
+    try await tapAccountField(username, in: app, verticalOffset: 0)
+    XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+    let baseline = try passwordEdgeColors(password, in: app)
+    username.typeText("Listener")
+    XCTAssertEqual(username.value as? String, "Listener")
+    dismissCredentialSuggestions(in: app)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(4))
+    var clearSamples = 0
+    while clearSamples < 2, clock.now < deadline {
+      let current = try passwordEdgeColors(password, in: app)
+      clearSamples =
+        zip(baseline, current).allSatisfy { abs($0.0 - $0.1) <= 3 } ? clearSamples + 1 : 0
+      if clearSamples < 2 { try await Task.sleep(for: .milliseconds(150)) }
+    }
+    XCTAssertEqual(
+      clearSamples, 2, "The upper edge stayed covered after dismissing the username suggestion")
+    XCTAssertTrue(app.keyboards.firstMatch.exists)
+    try await tapAccountField(password, in: app, verticalOffset: 4 - password.frame.height / 2)
+    try recordPasswordFocus(password, in: app)
+    password.typeText("fixture")
+    dismissCredentialSuggestions(in: app)
+    app.buttons["sign-in-password-submit"].tap()
+    assertPasswordFixtureAccount(in: app, server: url)
+  }
+
+  @MainActor func testPasswordArrowSubmitsAfterDismissingSuggestions() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    username.typeText("\n")
+    app.secureTextFields["sign-in-password"].typeText("fixture")
+    dismissCredentialSuggestions(in: app)
+    app.buttons["sign-in-password-submit"].tap()
+    assertPasswordFixtureAccount(in: app, server: url)
+  }
+
+  @MainActor private func assertPasswordFixtureAccount(
+    in app: XCUIApplication, server: String,
+    file: StaticString = #filePath, line: UInt = #line
+  ) {
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(accounts.waitForExistence(timeout: 10), file: file, line: line)
+    openAccountAction("Connection details", in: app)
+    XCTAssertEqual(
+      app.staticTexts["connection-username"].label, "Demo listener", file: file, line: line)
+    XCTAssertEqual(
+      app.staticTexts["connection-server-address"].label, server, file: file, line: line)
+  }
+
+  @MainActor func testPasswordSignInWithKeyboardNextAndGo() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    username.typeText("\n")
+    app.secureTextFields["sign-in-password"].typeText("fixture\n")
+    assertPasswordFixtureAccount(in: app, server: url)
+  }
+
+  @MainActor func testQuickConnectSignsInAndOutOfAnIsolatedLiveAccount() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let input = environment["JUKEBOX_ACCOUNT_TEST_SERVER"] else {
+      throw XCTSkip("Requires a designated HTTPS test server and disposable account")
+    }
+    continueAfterFailure = false
+    let server = try XCTUnwrap(URLComponents(string: input))
+    XCTAssertEqual(server.scheme, "https")
+    XCTAssertNotNil(server.host)
+    XCTAssertNil(server.user)
+    XCTAssertNil(server.password)
+    XCTAssertNil(server.query)
+    XCTAssertNil(server.fragment)
+    let expected = try XCTUnwrap(environment["JUKEBOX_ACCOUNT_TEST_USER"])
+    let run = try XCTUnwrap(environment["JUKEBOX_ACCOUNT_TEST_RUN"].flatMap(UUID.init(uuidString:)))
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = ["--transport-account-sign-in=" + run.uuidString, "--muted"]
+    app.launch()
+    defer { app.terminate() }
+    let address = app.textFields["sign-in-server"]
+    XCTAssertTrue(address.waitForExistence(timeout: 8))
+    try await typeAccountText(input, into: address, in: app, expecting: input)
+    app.buttons["sign-in-continue"].tap()
+    let show = app.buttons["sign-in-show-code"]
+    XCTAssertTrue(show.waitForExistence(timeout: 15))
+    show.tap()
+    let display = app.staticTexts["quick-connect-code"]
+    XCTAssertTrue(display.waitForExistence(timeout: 15))
+    let digits = try XCTUnwrap(display.value as? String).filter { !$0.isWhitespace }
+    XCTAssertEqual(digits.count, 6)
+    XCTAssertTrue(digits.utf8.allSatisfy { (48...57).contains($0) })
+    XCTContext.runActivity(named: "Approve Jukebox account check \(run.uuidString) \(digits)") {
+      _ in
+    }
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(accounts.waitForExistence(timeout: 70))
+    openAccountAction("Connection details", in: app)
+    let name = app.staticTexts["connection-username"]
+    XCTAssertTrue(name.waitForExistence(timeout: 6))
+    XCTAssertEqual(name.label, expected)
+    XCTAssertEqual(app.staticTexts["connection-server-address"].label, input)
+    app.buttons["Done"].tap()
+    openAccountAction("Sign out", in: app)
+    XCTAssertTrue(address.waitForExistence(timeout: 15))
+    XCTAssertFalse(accounts.exists)
+    XCTAssertFalse(app.buttons[expected].exists)
+  }
+
+  @MainActor private func launchSavedConnections() -> XCUIApplication {
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--quick-connect-fixture", "--example-saved-connections",
+    ]
+    app.launch()
+    return app
+  }
+
+  @MainActor func testInspectCancelAndRemoveOneOfThreeSameNameConnections() throws {
+    continueAfterFailure = false
+    let app = launchSavedConnections()
+    defer { app.terminate() }
+    let menu = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    let rows = app.buttons.matching(
+      NSPredicate(
+        format: "identifier BEGINSWITH %@ OR label BEGINSWITH %@", "saved-connection-",
+        "Demo listener"))
+    XCTAssertTrue(menu.waitForExistence(timeout: 12))
+    menu.tap()
+    XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 5))
+    for (index, origin) in [
+      "https://music.invalid/jellyfin", "http://music.invalid/jellyfin",
+      "https://offline.invalid/jellyfin",
+    ].enumerated() {
+      try assertMenuAddress(origin, on: rows.element(boundBy: index))
+    }
+    rows.element(boundBy: 1).tap()
+    let address = app.staticTexts["connection-server-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    XCTAssertEqual(address.label, "http://music.invalid/jellyfin")
+    XCTAssertFalse(app.buttons["Switch to this account"].exists)
+    let remove = app.buttons["remove-saved-connection"]
+    remove.tap()
+    let confirmation = app.alerts["Remove this saved connection?"]
+    XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      confirmation.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "http://music.invalid/jellyfin")
+      ).firstMatch.exists)
+    confirmation.buttons["Cancel"].tap()
+    XCTAssertTrue(remove.waitForExistence(timeout: 4))
+    remove.tap()
+    confirmation.buttons["Remove"].tap()
+    XCTAssertTrue(address.waitForNonExistence(timeout: 5))
+    menu.tap()
+    XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 4))
+    XCTAssertEqual(rows.count, 2)
+    rows.element(boundBy: 1).tap()
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "https://offline.invalid/jellyfin")
+    app.buttons["Switch to this account"].tap()
+    XCTAssertTrue(app.staticTexts["connection-action-error"].waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    openAccountAction("Connection details", in: app)
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "https://music.invalid/jellyfin")
+    XCTAssertTrue(app.staticTexts["Current account"].exists)
+    XCTAssertFalse(remove.exists)
+    for fact in ["Sample music server", "12.1.0"] {
+      XCTAssertTrue(
+        app.descendants(matching: .any).matching(
+          NSPredicate(format: "label CONTAINS %@ OR value == %@", fact, fact)
+        ).firstMatch.waitForExistence(timeout: 4))
+    }
+  }
+
+  @MainActor private func assertMenuAddress(_ address: String, on row: XCUIElement) throws {
+    let combined = [row.label, row.value as? String ?? ""].joined(separator: " ")
+    if combined.contains(address) { return }
+    let text = row.descendants(matching: .any).matching(
+      NSPredicate(format: "label CONTAINS %@ OR value == %@", address, address))
+    if text.firstMatch.exists { return }
+    let screenshot = row.screenshot()
+    let attachment = XCTAttachment(screenshot: screenshot)
+    attachment.name = "Sample saved connection row"
+    add(attachment)
+    let recognition = VNRecognizeTextRequest()
+    recognition.recognitionLevel = .accurate
+    recognition.usesLanguageCorrection = false
+    let image = try XCTUnwrap(screenshot.image.cgImage)
+    try VNImageRequestHandler(cgImage: image).perform([recognition])
+    let visible = recognition.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
+    XCTAssertTrue(visible.joined().replacingOccurrences(of: " ", with: "").contains(address))
+  }
+
+  @MainActor func testAccountMenuQuickConnectAndSignOutAppearance() throws {
+    continueAfterFailure = false
+    let app = launchSavedConnections()
+    defer { app.terminate() }
+    let account = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(account.waitForExistence(timeout: 12))
+    account.tap()
+    let approve = app.buttons["Quick Connect"]
+    let signOut = app.buttons["Sign out"]
+    XCTAssertTrue(approve.waitForExistence(timeout: 5))
+    XCTAssertTrue(signOut.isHittable)
+    let signOutInk = try menuIconPosition(in: signOut, destructive: true)
+    let regularInk = try menuIconPosition(in: approve, destructive: false)
+    XCTAssertEqual(signOutInk, regularInk, accuracy: 3, "Menu symbols should share a center column")
+    approve.tap()
+    XCTAssertTrue(app.textFields["quick-connect-input"].waitForExistence(timeout: 6))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(account.waitForExistence(timeout: 4))
+    openAccountAction("Sign out", in: app)
+    XCTAssertTrue(app.textFields["sign-in-server"].waitForExistence(timeout: 8))
+    XCTAssertEqual(
+      app.buttons.matching(NSPredicate(format: "label == %@", "Demo listener")).count, 2)
+  }
+
+  @MainActor private func menuIconPosition(in row: XCUIElement, destructive: Bool) throws -> CGFloat
+  {
+    let image = try XCTUnwrap(row.screenshot().image.cgImage)
+    let width = Int(row.frame.width.rounded())
+    let height = Int(row.frame.height.rounded())
+    XCTAssertTrue((60...700).contains(width) && (20...200).contains(height))
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    try rgba.withUnsafeMutableBytes { bytes in
+      let context = try XCTUnwrap(
+        CGContext(
+          data: bytes.baseAddress, width: width, height: height,
+          bitsPerComponent: 8, bytesPerRow: width * 4,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    var iconColumns = IndexSet()
+    var titlePixels = 0
+    for y in 2..<(height - 2) {
+      for x in 2..<(width - 2) {
+        let i = (y * width + x) * 4
+        let red = Int(rgba[i])
+        let green = Int(rgba[i + 1])
+        let blue = Int(rgba[i + 2])
+        let matches =
+          destructive
+          ? red > 145 && red - green > 55 && red - blue > 40
+          : blue > 150 && blue - red > 25 && green > red
+        guard matches else { continue }
+        if x < 45 { iconColumns.insert(x) } else if x > 48 { titlePixels += 1 }
+      }
+    }
+    if destructive { XCTAssertGreaterThan(titlePixels, 8, "The Sign out text should be red") }
+    let first = try XCTUnwrap(iconColumns.first, "Missing colored menu symbol")
+    let last = try XCTUnwrap(iconColumns.last)
+    XCTAssertGreaterThan(last - first, 6)
+    return row.frame.minX + CGFloat(first + last) / 2
+  }
+
   @MainActor func testSavedAccountDetailsOpenOffline() throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -3757,13 +4154,14 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(details.waitForExistence(timeout: 4))
     app.buttons["Offline listener"].tap()
-    XCTAssertTrue(address.waitForExistence(timeout: 4))
-    app.buttons["Done"].tap()
-    let field = app.textFields["Server address"]
-    XCTAssertTrue(field.waitForExistence(timeout: 4))
-    XCTAssertEqual(field.value as? String, "http://offline.invalid/music")
-    XCTAssertEqual(app.textFields["Username"].value as? String, "Offline listener")
-    XCTAssertFalse(app.buttons["Connect"].isEnabled)
+    let field = app.textFields["sign-in-server"]
+    XCTAssertTrue(app.staticTexts["sign-in-insecure-address"].waitForExistence(timeout: 5))
+    let prefilled = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", "http://offline.invalid/music"), object: field)
+    XCTAssertEqual(XCTWaiter.wait(for: [prefilled], timeout: 5), .completed)
+    XCTAssertFalse(address.exists)
+    XCTAssertFalse(app.textFields["Username"].exists)
+    XCTAssertFalse(app.buttons["sign-in-continue"].isEnabled)
   }
   @MainActor func testActiveConnectionDetailsAtLargeText() throws {
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -4100,7 +4498,7 @@ extension JukeboxUITests {
     let y = app.navigationBars.firstMatch.frame.maxY + 28
     var rgb: [Int] = []
     for _ in 0..<6 {
-      rgb = try browseMarginColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
+      rgb = try screenColor(XCTUnwrap(app.screenshot().image.cgImage), screen: screen, y: y)
       if rgb.max()! - rgb.min()! >= 15 { break }
     }
     XCTAssertGreaterThanOrEqual(rgb.max()! - rgb.min()!, 10)
@@ -4130,6 +4528,68 @@ extension JukeboxUITests {
     ) { _ in }
   }
 
+  @MainActor func testReadOnlyPlaylistOpensEditableCopyWithOriginalOrderAndRepeats() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--read-only-mix",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let library = app.tabBars.buttons["Library"]
+    XCTAssertTrue(library.waitForExistence(timeout: 8))
+    library.tap()
+    app.buttons["music-category-Playlists"].tap()
+    let list = app.buttons["playlist-fixture-playlist-morning"]
+    XCTAssertTrue(list.waitForExistence(timeout: 6))
+    list.tap()
+    let heading = app.staticTexts["playlist-heading"]
+    let actions = app.buttons["playlist-actions"]
+    let rows = (1...3).map { app.buttons["playlist-track-" + String($0)] }
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 6))
+    let original = rows.map(\.label)
+    XCTAssertEqual(original[0], original[2])
+    XCTAssertNotEqual(original[0], original[1])
+    actions.tap()
+    app.buttons["Make an editable copy"].tap()
+    let name = app.textFields["playlist-name"]
+    XCTAssertTrue(name.waitForExistence(timeout: 5))
+    XCTAssertEqual(name.value as? String, "Morning rotation (Editable copy)")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(actions.waitForExistence(timeout: 5))
+    actions.tap()
+    app.buttons["Edit playlist"].tap()
+    let copy = app.buttons["playlist-readonly-copy"]
+    XCTAssertTrue(copy.waitForExistence(timeout: 5))
+    copy.tap()
+    app.buttons["playlist-create-save"].tap()
+    XCTAssertTrue(
+      heading.wait(for: \.label, toEqual: "Morning rotation (Editable copy)", timeout: 10))
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 5))
+    XCTAssertEqual(rows.map(\.label), original)
+    actions.tap()
+    app.buttons["Edit playlist"].tap()
+    let sharing = app.buttons["playlist-sharing"]
+    XCTAssertTrue(sharing.waitForExistence(timeout: 5))
+    sharing.tap()
+    let visibility = app.switches["playlist-public"].firstMatch
+    XCTAssertTrue(visibility.waitForExistence(timeout: 5))
+    XCTAssertEqual(visibility.value as? String, "0")
+    app.navigationBars["Sharing"].buttons["BackButton"].tap()
+    app.buttons["playlist-edit-order"].tap()
+    app.buttons["playlist-entry-3"].tap()
+    app.buttons["Move up"].firstMatch.tap()
+    app.navigationBars["Song order"].buttons["BackButton"].tap()
+    app.buttons["playlist-editor-done"].tap()
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 5))
+    XCTAssertTrue(rows[1].wait(for: \.label, toEqual: original[2], timeout: 5))
+    XCTAssertEqual(rows.map(\.label), [original[0], original[2], original[1]])
+    app.navigationBars["Morning rotation (Editable copy)"].buttons["BackButton"].tap()
+    XCTAssertTrue(heading.wait(for: \.label, toEqual: "Morning rotation", timeout: 5))
+    XCTAssertEqual(rows.map(\.label), original)
+  }
+
   @MainActor func testPlaylistCreateAddRenameAndDelete() throws {
     let app = launchMutedPlaylistFixture()
     app.tabBars.buttons["Library"].tap()
@@ -4140,9 +4600,11 @@ extension JukeboxUITests {
     name.tap()
     name.typeText("Road mix")
     app.buttons["playlist-create-save"].tap()
-    let edit = app.buttons["playlist-edit"]
-    XCTAssertTrue(edit.waitForExistence(timeout: 6))
+    let actions = app.buttons["playlist-actions"]
+    let edit = app.buttons["Edit playlist"]
+    XCTAssertTrue(actions.waitForExistence(timeout: 6))
     XCTAssertEqual(app.staticTexts["playlist-heading"].label, "Road mix")
+    actions.tap()
     edit.tap()
     let add = app.buttons["playlist-add-songs"]
     XCTAssertTrue(add.waitForExistence(timeout: 6))
@@ -4167,6 +4629,7 @@ extension JukeboxUITests {
     XCTAssertTrue(app.buttons["playlist-track-1"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.buttons["playlist-track-1"].label, app.buttons["playlist-track-2"].label)
     XCTAssertEqual(app.staticTexts["playlist-heading"].label, "Road mix two")
+    actions.tap()
     edit.tap()
     app.buttons["playlist-edit-order"].tap()
     app.buttons["playlist-entry-2"].tap()
@@ -4197,7 +4660,8 @@ extension JukeboxUITests {
     let card = app.buttons["playlist-fixture-playlist-morning"]
     XCTAssertTrue(card.waitForExistence(timeout: 5))
     card.tap()
-    app.buttons["playlist-edit"].tap()
+    app.buttons["playlist-actions"].tap()
+    app.buttons["Edit playlist"].tap()
     let cover = app.buttons["playlist-track-cover"]
     XCTAssertTrue(cover.waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["playlist-choose-cover"].exists)

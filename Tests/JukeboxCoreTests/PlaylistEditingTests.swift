@@ -92,6 +92,12 @@ private actor PlaylistWire: HTTPTransport {
   var keys = ["first", "middle", "last"]
   var created: [String] = []
   var access = Access.owner
+  enum CreationResult: Equatable, Sendable {
+    case exact, omitRepeats, loseReply, publicCopy, readOnlyCopy
+  }
+  private var creationResult = CreationResult.exact
+  func setCreationResult(_ result: CreationResult) { creationResult = result }
+  func setOrder(_ order: [String]) { entries = order }
   var includeHidden = false
   func setAccess(_ access: Access) { self.access = access }
   private var manifestAvailable = true
@@ -119,6 +125,13 @@ private actor PlaylistWire: HTTPTransport {
         created =
           (try JSONSerialization.jsonObject(with: body) as? [String: Any])?["Ids"] as? [String]
           ?? []
+        switch creationResult {
+        case .exact, .publicCopy, .readOnlyCopy: break
+        case .omitRepeats:
+          var seen = Set<String>()
+          created = created.filter { seen.insert($0).inserted }
+        case .loseReply: throw URLError(.networkConnectionLost)
+        }
         return try data(["Id": "new"])
       }
       if path.hasSuffix("/mix/Items"), method == "POST" {
@@ -129,7 +142,14 @@ private actor PlaylistWire: HTTPTransport {
       }
       return HTTPReply(data: Data(), status: 204)
     }
-    if path.hasSuffix("/Playlists/new") { return try data(["ItemIds": created]) }
+    if path.hasSuffix("/Playlists/new") {
+      return try data([
+        "ItemIds": created, "OpenAccess": creationResult == .publicCopy, "Shares": [],
+      ])
+    }
+    if path.hasSuffix("/Playlists/new/Users/listener") {
+      return try data(["UserId": "listener", "CanEdit": creationResult != .readOnlyCopy])
+    }
     if path.hasSuffix("/UserViews") {
       return try page([
         ["Type": "CollectionFolder", "CollectionType": "music", "Name": "Music", "Id": "music"]
@@ -173,6 +193,68 @@ private actor PlaylistWire: HTTPTransport {
 }
 
 extension PlaylistEditingTests {
+  func testCopyOfReadOnlyMixSendsCompleteOrderOnceAndPreservesOriginal() async throws {
+    let wire = PlaylistWire()
+    await wire.setAccess(.unowned)
+    let order = (0..<8_000).map { $0.isMultiple(of: 3) ? "two" : "one" }
+    await wire.setOrder(order)
+    let client = try network(wire)
+    let source = MusicPlaylist(id: "mix", title: "Imported mix")
+    let saved = try await client.changePlaylist(
+      library: "music", state: nil,
+      change: .copy(source, name: "My mix"), isCurrent: { true })
+    XCTAssertEqual(saved.id, "new")
+    XCTAssertNil(saved.notice)
+    let original = await wire.entries
+    let copied = await wire.created
+    XCTAssertEqual(original, order)
+    XCTAssertEqual(copied, order)
+    let writes = await wire.writes
+    XCTAssertEqual(writes.map(\.0), ["POST"])
+    XCTAssertEqual(writes.map(\.1), ["/Playlists"])
+    let body = try XCTUnwrap(JSONSerialization.jsonObject(with: writes[0].2) as? [String: Any])
+    XCTAssertEqual(body["IsPublic"] as? Bool, false)
+    XCTAssertEqual(body["UserId"] as? String, "listener")
+    XCTAssertNil(body["Users"])
+  }
+
+  func testCopyRequiresCompleteManifestAndSelectedLibraryBeforeCreation() async throws {
+    for hideMember in [true, false] {
+      let wire = PlaylistWire()
+      if hideMember { await wire.hideMember() } else { await wire.hideManifest() }
+      let client = try network(wire)
+      do {
+        _ = try await client.changePlaylist(
+          library: "music", state: nil,
+          change: .copy(.init(id: "mix", title: "Imported mix"), name: "Copy"), isCurrent: { true })
+        XCTFail("Copied an unverified source")
+      } catch { XCTAssertEqual(error as? PlaylistEditError, .limitedToLibrary) }
+      let writes = await wire.writes
+      XCTAssertTrue(writes.isEmpty)
+    }
+  }
+
+  func testCopyReportsAlteredOrderOrUnknownCreationWithoutRepeatingWrite() async throws {
+    for result in [PlaylistWire.CreationResult.omitRepeats, .loseReply, .publicCopy, .readOnlyCopy]
+    {
+      let wire = PlaylistWire()
+      await wire.setCreationResult(result)
+      let client = try network(wire)
+      do {
+        let save = try await client.changePlaylist(
+          library: "music", state: nil,
+          change: .copy(.init(id: "mix", title: "Mix"), name: "Copy"), isCurrent: { true })
+        XCTAssertNotEqual(result, .loseReply)
+        XCTAssertEqual(save.id, "new")
+        XCTAssertNotNil(save.notice)
+      } catch {
+        XCTAssertEqual(result, .loseReply)
+        XCTAssertEqual(error as? PlaylistEditError, .copyUnconfirmed)
+      }
+      let writes = await wire.writes
+      XCTAssertEqual(writes.count, 1)
+    }
+  }
   private func network(_ wire: PlaylistWire) throws -> JellyfinClient {
     try JellyfinClient(
       connection: Connection(

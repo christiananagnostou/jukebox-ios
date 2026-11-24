@@ -109,6 +109,8 @@ import Observation
   private var coverTones: [CoverKey: ArtworkTone] = [:]
   private let artworkTone: @Sendable (Data) async -> ArtworkTone?
   private let prepareCover: @Sendable (Data) async -> Data?
+  @ObservationIgnored private var playCommandRevision: UInt64 = 0
+  @ObservationIgnored private var removingSavedConnection = false
   private(set) var pendingSignOut: String?
   @ObservationIgnored private var coverOrder: [CoverKey] = []
   @ObservationIgnored private var coverBytes = 0
@@ -356,6 +358,16 @@ import Observation
       server: server, deviceID: deviceID, transport: authenticationTransport,
       allowedFamilies: allowedFamilies)
   }
+  func serverInfo(for connection: Connection) async throws -> JellyfinServerInfo {
+    let generation = epoch
+    guard active?.id == connection.id, !isFixture else { throw CancellationError() }
+    let info = try await authentication(for: connection.server).serverInfo()
+    guard generation == epoch else { throw CancellationError() }
+    return info
+  }
+  func signInCodeAvailability(on server: ServerAddress) async throws -> Bool? {
+    try await authentication(for: server).signInCodeAvailability()
+  }
   func signInWithQuickConnect(
     server: ServerAddress, showCode: @MainActor @Sendable (QuickConnectCode) -> Void
   ) async throws {
@@ -382,7 +394,7 @@ import Observation
   private func signIn(_ authenticate: () async throws -> (Connection, String)) async throws
     -> Connection
   {
-    guard !busy, pendingSignOut == nil else { throw CancellationError() }
+    guard !busy, !removingSavedConnection, pendingSignOut == nil else { throw CancellationError() }
     busy = true
     error = nil
     let generation = epoch
@@ -412,26 +424,16 @@ import Observation
     }
   }
   func activate(_ connection: Connection) async {
-    guard !busy, pendingSignOut == nil else { return }
+    guard !busy, !removingSavedConnection, pendingSignOut == nil else { return }
     busy = true
     var generation = epoch
-    var step = ConnectionStepError.Step.savingQueue
+    var intent = playID
+    var revision = saveRevision
+    let playCommand = playCommandRevision
+    var step = ConnectionStepError.Step.identity
+    defer { if epoch == generation { busy = false } }
     do {
-      if active != nil {
-        pause()
-        let intent = playID
-        let revision = saveRevision + 1
-        try await saveNow()
-        try Task.checkCancellation()
-        guard generation == epoch else { return }
-        guard !playbackRequested, playID == intent, saveRevision == revision else {
-          busy = false
-          return
-        }
-      }
-      retire()
-      isFixture = false
-      generation = epoch
+      try connection.server.requireCredentialTransport()
       step = .secureStorage
       guard let token = try await vault.read(account: connection.id) else {
         throw ClientError.unauthorized
@@ -439,45 +441,89 @@ import Observation
       let api = try factory(connection, token)
       step = .identity
       try await api.verifyIdentity()
+      try Task.checkCancellation()
+      guard generation == epoch, playCommand == playCommandRevision, playID == intent,
+        playbackRequested || saveRevision == revision
+      else { return }
+      if active != nil {
+        step = .savingQueue
+        pause()
+        intent = playID
+        revision = saveRevision + 1
+        try await saveNow()
+      }
+      try Task.checkCancellation()
+      guard generation == epoch, playCommand == playCommandRevision, !playbackRequested,
+        playID == intent, saveRevision == revision
+      else { return }
       step = .restoration
       var restored = try await storage.restore(account: connection.id) ?? QueueState()
       if !restored.entries.isEmpty {
         restored.reconcile(try await api.validate(ids: restored.entries.map { $0.track.id }))
       }
-      try Task.checkCancellation()
-      guard generation == epoch else { return }
-      let lease = await storage.lease(account: connection.id)
-      guard generation == epoch else { return }
       let preferences =
         (try? await storage.catalogPreferences(account: connection.id))
         ?? CatalogBrowsePreferences()
+      try Task.checkCancellation()
+      guard generation == epoch, playCommand == playCommandRevision, !playbackRequested,
+        playID == intent, saveRevision == revision
+      else { return }
+      let saved = [connection] + connections.filter { $0.id != connection.id }
+      step = .savedConnection
+      try await storage.saveConnections(saved)
       guard generation == epoch else { return }
+      let lease = await storage.lease(account: connection.id)
+      guard generation == epoch else { return }
+      retire()
+      generation = epoch
+      isFixture = false
       service = api
       active = connection
       storageLease = lease
       installBrowser(api, account: connection.id, preferences: preferences)
       queue = restored
-      connections.removeAll { $0.id == connection.id }
-      connections.insert(connection, at: 0)
-      try await storage.saveConnections(connections)
-      guard generation == epoch else { return }
-      busy = false
+      connections = saved
       #if DEBUG
         Self.transportActivationReceipt?.accept(
           store: self, lease: TransportAcceptanceLease(epoch: epoch, intent: playID))
       #endif
+    } catch is CancellationError {
     } catch {
       guard generation == epoch else { return }
       if error as? ClientError == .unauthorized {
-        try? await vault.erase(account: connection.id)
-        try? await storage.retire(account: connection.id, erase: true)
-        connections.removeAll { $0.id == connection.id }
-        try? await storage.saveConnections(connections)
+        if active?.id == connection.id {
+          await logout(ifCurrent: generation)
+          return
+        }
+        do {
+          try await vault.erase(account: connection.id)
+          try await storage.removeSavedConnection(account: connection.id)
+          guard generation == epoch else { return }
+          connections.removeAll { $0.id == connection.id }
+        } catch {
+          guard generation == epoch else { return }
+          self.error =
+            "This saved sign-in has expired. Open its connection details to finish removing it."
+          return
+        }
       }
-      guard generation == epoch else { return }
-      busy = false
       self.error = message(ConnectionStepError(step: step, error: error))
     }
+  }
+  func removeSavedConnection(_ connection: Connection) async throws {
+    guard !busy, !removingSavedConnection, pendingSignOut == nil, active?.id != connection.id,
+      connections.contains(where: { $0.id == connection.id })
+    else { throw CancellationError() }
+    removingSavedConnection = true
+    let generation = epoch
+    busy = true
+    defer {
+      removingSavedConnection = false
+      if generation == epoch { busy = false }
+    }
+    try await vault.erase(account: connection.id)
+    try await storage.removeSavedConnection(account: connection.id)
+    connections.removeAll { $0.id == connection.id }
   }
   func enterFixture(service: any MusicCatalogServing) async {
     guard !busy else { return }
@@ -912,6 +958,7 @@ import Observation
     sleepTimerDeadline = nil
   }
   func addConnection() {
+    guard !removingSavedConnection else { return }
     persist()
     retire()
     busy = false
@@ -1092,6 +1139,7 @@ import Observation
     #endif
   }
   func play() {
+    playCommandRevision &+= 1
     consumeElapsedSleepTimer()
     cancelAlbumPlay()
     startPlayback()
@@ -1823,8 +1871,7 @@ import Observation
     busy = true
     var complete = true
     do { try await vault.erase(account: account) } catch { complete = false }
-    do { try await storage.saveConnections(connections) } catch { complete = false }
-    do { try await storage.retire(account: account, erase: true) } catch { complete = false }
+    do { try await storage.removeSavedConnection(account: account) } catch { complete = false }
     if complete { pendingSignOut = nil }
     error = complete ? nil : "Some saved account data could not be removed. Retry sign-out."
     busy = false

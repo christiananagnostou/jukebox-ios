@@ -292,6 +292,51 @@ final class TransportCaptureTests: XCTestCase {
 }
 
 final class TransportControlEntryTests: XCTestCase {
+  func testPlaylistCopyAndDisabledCodeScenariosUseIsolatedFixtureStartup() {
+    let id = UUID()
+    let base = ["--fixture", "--muted", "--transport-ui=" + id.uuidString]
+    for options in [
+      ["--read-only-mix"], ["--quick-connect-fixture", "--codes-disabled"],
+      ["--quick-connect-fixture", "--example-saved-connections"],
+    ] {
+      let launch = TransportControlLaunch(arguments: base + options)
+      XCTAssertTrue(launch.startup(normal: { false }, isolated: { true }))
+      #if DEBUG
+        guard case .interactive(let launchedID) = launch else {
+          XCTFail("Expected the requested isolated UI scenario")
+          continue
+        }
+        XCTAssertEqual(launchedID, id)
+        XCTAssertNil(launch.runID)
+      #else
+        if case .rejected = launch {} else { XCTFail("Release admitted a test fixture") }
+      #endif
+    }
+    if case .rejected = TransportControlLaunch(arguments: base + ["--example-saved-connections"]) {
+    } else {
+      XCTFail("Sample connections require the isolated Quick Connect service")
+    }
+  }
+  func testLiveAccountCheckStartsWithFreshStorageAndCannotBeCombinedWithFixtures() {
+    let flag = "--transport-account-sign-in=" + UUID().uuidString
+    let live = TransportControlLaunch(arguments: [flag, "--muted"])
+    XCTAssertTrue(live.startup(normal: { false }, isolated: { true }))
+    #if DEBUG
+      guard case .accountSignIn = live else { return XCTFail("Expected isolated sign-in") }
+      XCTAssertNil(live.runID)
+    #else
+      guard case .rejected = live else { return XCTFail("Release admitted a test launch") }
+    #endif
+    for flags in [
+      [flag], [flag, "--muted", "--fixture"], [flag, "--muted", "--connect"],
+      ["--transport-account-sign-in=invalid", "--muted"],
+    ] {
+      guard case .rejected = TransportControlLaunch(arguments: flags) else {
+        return XCTFail("Malformed or mixed account-check arguments")
+      }
+    }
+  }
+
   func testInteractiveEntrySelectsOnlyIsolatedDependenciesAndOwnsNoTransportFiles() {
     let id = "00000000-0000-0000-0000-000000000001"
     let arguments = ["--fixture", "--muted", "--transport-ui=" + id]
@@ -361,6 +406,8 @@ final class TransportControlEntryTests: XCTestCase {
       arguments + ["--session-check=" + id], arguments + ["--artwork-check=" + id],
       arguments + ["--window-fixture"], arguments + ["--fixture-rtl"],
       arguments + ["--unknown"], arguments + ["unexpected-payload"],
+      arguments + ["--codes-disabled"], arguments + ["--read-only-mix", "--saved-account-fixture"],
+      arguments + ["--codes-disabled", "--quick-connect-fixture", "--read-only-mix"],
     ]
     for values in malformed {
       let launch = TransportControlLaunch(arguments: values)

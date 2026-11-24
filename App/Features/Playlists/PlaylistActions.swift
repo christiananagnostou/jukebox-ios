@@ -121,36 +121,81 @@ private struct PlaylistDestinationPicker: View {
 struct PlaylistCreateForm: View {
   let browser: MusicBrowser
   let scope: UUID
-  var tracks: [MusicItem] = []
+  let tracks: [MusicItem]
+  let source: MusicPlaylist?
   let created: (String) -> Void
-  @State private var name = ""
+  @Environment(\.dismiss) private var dismiss
+  @State private var name: String
   @State private var error: String?
   @State private var savedWithNotice: PlaylistSave?
   @State private var busy = false
+  @State private var creationUnknown = false
+
+  init(
+    browser: MusicBrowser, scope: UUID, tracks: [MusicItem] = [],
+    copying source: MusicPlaylist? = nil, created: @escaping (String) -> Void
+  ) {
+    self.browser = browser
+    self.scope = scope
+    self.tracks = tracks
+    self.source = source
+    self.created = created
+    let suffix = String(localized: " (Editable copy)")
+    _name = State(
+      initialValue: source.map { String($0.title.prefix(max(0, 128 - suffix.count))) + suffix }
+        ?? "")
+  }
+
   var body: some View {
     Form {
       Section {
         TextField("Playlist name", text: $name).accessibilityIdentifier("playlist-name")
       } footer: {
-        Text("Only you can see this playlist until you share it.")
+        if source != nil {
+          Text(
+            "Create a private playlist in your account with the songs in their saved order, including repeats."
+          )
+        } else {
+          Text("Only you can see this playlist until you share it.")
+        }
       }
-      if let error { Text(error).foregroundStyle(.secondary) }
-    }.navigationTitle("New playlist").navigationBarTitleDisplayMode(.inline)
+      if let error {
+        Text(error).foregroundStyle(.secondary).accessibilityIdentifier("playlist-create-error")
+      }
+      if busy && source != nil { ProgressView("Copying playlist…") }
+    }.navigationTitle(source == nil ? "New playlist" : "Make an editable copy")
+      .navigationBarTitleDisplayMode(.inline)
+      .navigationBarBackButtonHidden(busy || source != nil)
       .toolbar {
+        if source != nil {
+          ToolbarItem(placement: .cancellationAction) {
+            Button(creationUnknown ? "Done" : "Cancel") { dismiss() }.disabled(busy)
+          }
+        }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Create") {
-            guard !busy else { return }
+          Button(source == nil ? "Create" : "Create copy") {
+            guard !busy, !creationUnknown else { return }
             busy = true
             Task {
               defer { busy = false }
               do {
+                let mutation =
+                  source.map { PlaylistMutation.copy($0, name: name) } ?? .create(name, tracks)
                 let saved = try await browser.changePlaylist(
-                  .create(name, tracks), state: nil, scope: scope)
+                  mutation, state: nil, scope: scope)
+                guard browser.scope == scope, browser.metadataIsCurrent else { return }
                 if saved.notice == nil { created(saved.id) } else { savedWithNotice = saved }
-              } catch { self.error = playlistMessage(error) }
+              } catch {
+                guard browser.scope == scope, browser.metadataIsCurrent else { return }
+                creationUnknown = error as? PlaylistEditError == .copyUnconfirmed
+                self.error = playlistMessage(error)
+              }
             }
-          }.disabled(busy || (try? PlaylistMutation.name(name)) == nil)
-            .accessibilityIdentifier("playlist-create-save")
+          }.disabled(
+            busy || creationUnknown || savedWithNotice != nil
+              || (try? PlaylistMutation.name(name)) == nil
+          )
+          .accessibilityIdentifier("playlist-create-save")
         }
       }.disabled(busy).interactiveDismissDisabled(busy)
       .alert(item: $savedWithNotice) { saved in

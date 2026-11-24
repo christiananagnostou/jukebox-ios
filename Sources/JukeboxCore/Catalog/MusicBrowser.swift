@@ -1278,7 +1278,9 @@ import Observation
     } catch {
       if metadataIsCurrent(scope: owner, library: library), !(error is CancellationError),
         !change.changesSharingOnly,
-        (error as? PlaylistEditError).map({ $0 == .changed || $0 == .uncertain }) != false
+        (error as? PlaylistEditError).map({
+          $0 == .changed || $0 == .uncertain || $0 == .copyUnconfirmed
+        }) != false
       {
         root.playlistChanged(id: state?.playlist.id, tracks: true, refreshing: self)
         Task { await self.loadPlaylistIndex(scope: owner, refresh: true) }

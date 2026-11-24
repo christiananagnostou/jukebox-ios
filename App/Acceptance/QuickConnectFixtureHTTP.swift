@@ -2,12 +2,29 @@
   import Foundation
 
   actor QuickConnectFixtureHTTP: HTTPTransport {
+    private let codesEnabled: Bool
     private var issued = 0
     private var polls = 0
     private var secret: String { "invented-challenge-\(issued)" }
+    init(codesEnabled: Bool) { self.codesEnabled = codesEnabled }
+
+    static func saveExampleConnections(to storage: LibraryStorage, vault: any TokenVault)
+      async throws
+    {
+      let accounts = try [
+        "https://music.invalid/jellyfin", "http://music.invalid/jellyfin",
+        "https://offline.invalid/jellyfin",
+      ].map {
+        Connection(
+          server: try ServerAddress($0), userID: "fixture-listener", username: "Demo listener")
+      }
+      for account in accounts { try await vault.write("invented-session", account: account.id) }
+      try await storage.saveConnections(accounts)
+    }
 
     func send(_ request: URLRequest) async throws -> HTTPReply {
       try Task.checkCancellation()
+      if request.url?.host == "offline.invalid" { throw URLError(.cannotConnectToHost) }
       guard let url = request.url, url.scheme == "https", url.host == "music.invalid",
         url.path.hasPrefix("/jellyfin/")
       else { throw ClientError.invalidServer }
@@ -16,8 +33,11 @@
       let body: Any
       switch (request.httpMethod, path) {
       case ("GET", "System/Info/Public"):
-        body = ["Version": "12.1.0"]
+        body = ["Version": "12.1.0", "ServerName": "Sample music server"]
+      case ("GET", "QuickConnect/Enabled"):
+        body = codesEnabled
       case ("POST", "QuickConnect/Initiate"):
+        guard codesEnabled else { return HTTPReply(data: Data(), status: 403) }
         issued += 1
         polls = 0
         body = ["Code": String(120_000 + issued), "Secret": secret]
@@ -31,10 +51,14 @@
         guard polls >= 2, let data = request.httpBody,
           try JSONDecoder().decode([String: String].self, from: data)["Secret"] == secret
         else { throw ClientError.unauthorized }
-        body = [
-          "User": ["Id": "fixture-listener", "Name": "Demo listener"],
-          "AccessToken": "invented-session",
-        ]
+        body = signedInAccount
+      case ("POST", "Users/AuthenticateByName"):
+        guard let data = request.httpBody,
+          try JSONDecoder().decode([String: String].self, from: data) == [
+            "Username": "Listener", "Pw": "fixture",
+          ]
+        else { return HTTPReply(data: Data(), status: 401) }
+        body = signedInAccount
       case ("GET", "Users/Me"):
         body = ["Id": "fixture-listener", "Name": "Demo listener"]
       case ("POST", "QuickConnect/Authorize"):
@@ -60,6 +84,12 @@
       return HTTPReply(
         data: try JSONSerialization.data(withJSONObject: body, options: .fragmentsAllowed),
         status: 200)
+    }
+    private var signedInAccount: [String: Any] {
+      [
+        "User": ["Id": "fixture-listener", "Name": "Demo listener"],
+        "AccessToken": "invented-session",
+      ]
     }
   }
 #endif

@@ -323,7 +323,15 @@ actor LibraryStorage {
   func connections() throws -> [Connection] {
     let url = directory.appendingPathComponent("connections.json")
     guard let data = try read(url) else { return [] }
-    return try JSONDecoder().decode([Connection].self, from: data)
+    var seen = Set<String>()
+    return try JSONDecoder().decode([Connection].self, from: data).filter {
+      seen.insert($0.id).inserted
+    }
+  }
+  func removeSavedConnection(account: String) throws {
+    try retire(account: account, erase: true)
+    let saved = try connections()
+    try saveConnections(saved.filter { $0.id != account })
   }
   func saveConnections(_ connections: [Connection]) throws {
     try write(connections, to: directory.appendingPathComponent("connections.json"))

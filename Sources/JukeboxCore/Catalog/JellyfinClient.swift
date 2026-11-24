@@ -1631,23 +1631,13 @@ extension JellyfinClient: MusicPlaylistEditing {
       })
     else { throw PlaylistEditError.readOnly }
     let path = "Playlists/" + id
-    let permission = try await readPlaylistValue(read) {
-      try await request(path + "/Users/" + connection.userID, allowMissing: true)
-    }
-    guard let grant = try? JSONDecoder().decode(SharePermission.self, from: permission),
-      playlistTrackKey(grant.user) == playlistTrackKey(connection.userID), grant.canEdit
-    else { throw PlaylistEditError.readOnly }
+    guard try await canEditPlaylist(id, read: read) else { throw PlaylistEditError.readOnly }
     let entries = try await playlistPages(
       PlaylistEditEntry.self, path: path + "/Items", query: [], read: read, limit: 500)
-    let order = entries.map(\.track)
-    guard let complete = try await compactPlaylist(id, read: read), complete == order else {
+    let order = try await verifiedPlaylistOrder(id, candidate: candidate, read: read)
+    guard entries.elementsEqual(order, by: { $0.track == $1 }) else {
       throw PlaylistEditError.limitedToLibrary
     }
-    let ids = Set(order)
-    guard !candidate.needsMusicProof || !ids.isEmpty,
-      try await selectedPlaylistSongs(ids, library: read.library, read: read, hydrate: false).count
-        == ids.count
-    else { throw PlaylistEditError.limitedToLibrary }
     let owner: Bool
     do {
       _ = try await readPlaylistValue(read) { try await request(path + "/Users") }
@@ -1655,6 +1645,28 @@ extension JellyfinClient: MusicPlaylistEditing {
     } catch ClientError.forbidden { owner = false }
     return PlaylistEditState(
       playlist: playlist, entries: entries, canDelete: candidate.canDelete, canShare: owner)
+  }
+
+  private func verifiedPlaylistOrder(
+    _ id: String, candidate: PlaylistSummaryDTO, read: PlaylistRead
+  ) async throws -> [String] {
+    guard let order = try await compactPlaylist(id, read: read),
+      !order.isEmpty || !candidate.needsMusicProof
+    else { throw PlaylistEditError.limitedToLibrary }
+    let ids = Set(order)
+    let selected = try await selectedPlaylistSongs(
+      ids, library: read.library, read: read, hydrate: false)
+    guard ids.count == selected.count else { throw PlaylistEditError.limitedToLibrary }
+    return order
+  }
+
+  private func canEditPlaylist(_ id: String, read: PlaylistRead) async throws -> Bool {
+    let permission = try await readPlaylistValue(read) {
+      try await request("Playlists/" + id + "/Users/" + connection.userID, allowMissing: true)
+    }
+    guard let grant = try? JSONDecoder().decode(SharePermission.self, from: permission)
+    else { return false }
+    return grant.canEdit && playlistTrackKey(grant.user) == playlistTrackKey(connection.userID)
   }
 
   func playlistSharing(
@@ -1723,25 +1735,15 @@ extension JellyfinClient: MusicPlaylistEditing {
     isCurrent: @escaping @MainActor @Sendable () -> Bool
   ) async throws -> PlaylistSave {
     let read = try await playlistRead(library: library, isCurrent: isCurrent)
+    if case .copy(let source, let name) = change {
+      guard state == nil else { throw ClientError.invalidResponse }
+      return try await copyPlaylist(source, name: name, read: read)
+    }
     if case .create(let rawName, let songs) = change {
       guard state == nil else { throw ClientError.invalidResponse }
       let name = try PlaylistMutation.name(rawName)
       let ids = try await verifiedSongs(songs, read: read)
-      let data = try await readPlaylistValue(read) {
-        try await request(
-          "Playlists",
-          body: [
-            "Name": name, "UserId": connection.userID, "MediaType": "Audio", "IsPublic": false,
-            "Ids": ids,
-          ])
-      }
-      struct Created: Decodable {
-        let id: String
-        enum CodingKeys: String, CodingKey { case id = "Id" }
-      }
-      guard let id = try? JSONDecoder().decode(Created.self, from: data).id,
-        PlaylistSummaryDTO.validID(id)
-      else { throw PlaylistEditError.uncertain }
+      let id = try await createPrivatePlaylist(name: name, ids: ids, read: read)
       return try await confirmPlaylistAddition(id, previous: [], requested: ids, read: read)
     }
     guard let state else { throw ClientError.invalidResponse }
@@ -1751,7 +1753,7 @@ extension JellyfinClient: MusicPlaylistEditing {
     var expected = fresh.entries.map(\.track)
     var checkOrder = false
     switch change {
-    case .create: throw ClientError.invalidResponse
+    case .create, .copy: throw ClientError.invalidResponse
     case .rename(let raw):
       let name = try PlaylistMutation.name(raw)
       _ = try await readPlaylistValue(read) { try await request(path, body: ["Name": name]) }
@@ -1826,6 +1828,89 @@ extension JellyfinClient: MusicPlaylistEditing {
       throw PlaylistEditError.changed
     }
     return PlaylistSave(id: id)
+  }
+  private func copyPlaylist(_ source: MusicPlaylist, name: String, read: PlaylistRead) async throws
+    -> PlaylistSave
+  {
+    let name = try PlaylistMutation.name(name)
+    guard PlaylistSummaryDTO.validID(source.id), PlaylistSummaryDTO.validID(connection.userID),
+      let candidate = try await playlistIndex(read, id: source.id).first(where: {
+        $0.id == source.id
+      })
+    else { throw ClientError.forbidden }
+    let order = try await verifiedPlaylistOrder(source.id, candidate: candidate, read: read)
+    let id: String
+    do {
+      id = try await createPrivatePlaylist(name: name, ids: order, read: read)
+    } catch ClientError.forbidden { throw ClientError.forbidden } catch ClientError.unauthorized {
+      throw ClientError.unauthorized
+    } catch is CancellationError { throw CancellationError() } catch {
+      throw PlaylistEditError.copyUnconfirmed
+    }
+    guard playlistTrackKey(id) != playlistTrackKey(source.id) else {
+      throw PlaylistEditError.copyUnconfirmed
+    }
+
+    struct CopyDetails: Decodable {
+      let itemIDs: [String]
+      let isPublic: Bool
+      let shares: [SharePermission]
+      enum CodingKeys: String, CodingKey {
+        case itemIDs = "ItemIds"
+        case isPublic = "OpenAccess"
+        case shares = "Shares"
+      }
+    }
+    do {
+      let data = try await readPlaylistValue(read) { try await request("Playlists/" + id) }
+      let copy = try JSONDecoder().decode(CopyDetails.self, from: data)
+      guard !copy.isPublic, copy.shares.isEmpty else {
+        return PlaylistSave(
+          id: id,
+          notice:
+            "Jellyfin created the copy with different sharing settings. Review Sharing on the new playlist."
+        )
+      }
+      guard copy.itemIDs.elementsEqual(order, by: { playlistTrackKey($0) == $1 }) else {
+        return PlaylistSave(
+          id: id,
+          notice:
+            "Jellyfin created the copy, but the saved songs don’t match the original order and repeats."
+        )
+      }
+      guard try await canEditPlaylist(id, read: read) else {
+        return PlaylistSave(
+          id: id, notice: "Jellyfin created the copy, but editing access couldn’t be confirmed.")
+      }
+      return PlaylistSave(id: id)
+    } catch ClientError.unauthorized { throw ClientError.unauthorized } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      return PlaylistSave(
+        id: id,
+        notice: "Jellyfin created the copy. Its songs and access settings couldn’t be verified.")
+    }
+  }
+
+  private func createPrivatePlaylist(name: String, ids: [String], read: PlaylistRead) async throws
+    -> String
+  {
+    let data = try await readPlaylistValue(read) {
+      try await request(
+        "Playlists",
+        body: [
+          "Name": name, "UserId": connection.userID, "MediaType": "Audio", "IsPublic": false,
+          "Ids": ids,
+        ])
+    }
+    struct Created: Decodable {
+      let id: String
+      enum CodingKeys: String, CodingKey { case id = "Id" }
+    }
+    guard let id = try? JSONDecoder().decode(Created.self, from: data).id,
+      PlaylistSummaryDTO.validID(id)
+    else { throw PlaylistEditError.uncertain }
+    return id
   }
   private func confirmPlaylistAddition(
     _ id: String, previous: [String], requested: [String], read: PlaylistRead

@@ -48,6 +48,7 @@ private struct ImportedPlaylistCover: Transferable {
   var contents: PlaylistContents?
   var busy = false
   var error: String?
+  var readOnly = false
   var playlist: MusicPlaylist {
     browser.playlistIndex.items?.first { $0.id == original.id } ?? original
   }
@@ -69,10 +70,12 @@ private struct ImportedPlaylistCover: Transferable {
       state = fresh
       contents = songs
       error = nil
+      readOnly = false
     } catch {
       state = nil
       contents = nil
       self.error = playlistMessage(error)
+      readOnly = error as? PlaylistEditError == .readOnly
     }
   }
   func save(_ change: PlaylistMutation) async -> Bool {
@@ -104,6 +107,7 @@ private struct ImportedPlaylistCover: Transferable {
 struct PlaylistEditorView: View {
   let store: PlayerStore
   let deleted: () -> Void
+  let copied: (String) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var model: PlaylistEditorModel
   @State private var name: String
@@ -113,10 +117,11 @@ struct PlaylistEditorView: View {
   @State private var removeCoverConfirmation = false
   init(
     store: PlayerStore, browser: MusicBrowser, scope: UUID, playlist: MusicPlaylist,
-    deleted: @escaping () -> Void
+    deleted: @escaping () -> Void, copied: @escaping (String) -> Void
   ) {
     self.store = store
     self.deleted = deleted
+    self.copied = copied
     _name = State(initialValue: playlist.title)
     _model = State(
       initialValue: PlaylistEditorModel(browser: browser, scope: scope, playlist: playlist))
@@ -180,7 +185,20 @@ struct PlaylistEditorView: View {
         } else if model.error == nil {
           ProgressView("Loading playlist editor")
         }
-        if let error = model.error { RetryNotice(message: error) { Task { await model.load() } } }
+        if model.readOnly {
+          Section {
+            Text("This playlist is read-only. You can edit a private copy in your account.")
+            NavigationLink {
+              PlaylistCreateForm(
+                browser: model.browser, scope: model.scope, copying: model.playlist, created: copied
+              )
+            } label: {
+              Label("Make an editable copy", systemImage: "plus.square.on.square")
+            }.accessibilityIdentifier("playlist-readonly-copy")
+          }
+        } else if let error = model.error {
+          RetryNotice(message: error) { Task { await model.load() } }
+        }
       }.navigationTitle("Edit playlist").navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .confirmationAction) {

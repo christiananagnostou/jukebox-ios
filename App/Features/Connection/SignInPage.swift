@@ -69,13 +69,17 @@ struct SignInActionRow: View {
 
 extension View {
   func signInField(focused: Bool, focus: @escaping () -> Void) -> some View {
-    let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
-    return textFieldStyle(.plain)
+    textFieldStyle(.plain)
       .padding(.horizontal, 14).padding(.vertical, 12)
       .frame(maxWidth: .infinity, minHeight: SignInControl.height, alignment: .leading)
-      .background(MusicUI.panel, in: shape)
       .contentShape(.rect)
       .simultaneousGesture(TapGesture().onEnded { focus() })
+      .signInFieldSurface(focused: focused)
+  }
+
+  fileprivate func signInFieldSurface(focused: Bool) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
+    return background(MusicUI.panel, in: shape)
       .overlay {
         shape.strokeBorder(focused ? MusicUI.tint : MusicUI.border, lineWidth: focused ? 2 : 1)
           .allowsHitTesting(false).accessibilityHidden(true)
@@ -85,6 +89,86 @@ extension View {
   func signInHelp() -> some View {
     font(.footnote).foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+  }
+}
+
+private struct CredentialInput: UIViewRepresentable {
+  enum Kind { case username, password }
+  let kind: Kind
+  @Binding var text: String
+  @Binding var focused: Kind?
+  let submit: () -> Void
+  @Environment(\.isEnabled) private var enabled
+
+  init(_ kind: Kind, text: Binding<String>, focused: Binding<Kind?>, submit: @escaping () -> Void) {
+    self.kind = kind
+    _text = text
+    _focused = focused
+    self.submit = submit
+  }
+
+  final class Input: UITextField {
+    override func textRect(forBounds bounds: CGRect) -> CGRect {
+      super.textRect(forBounds: bounds.insetBy(dx: 14, dy: 0))
+    }
+    override func editingRect(forBounds bounds: CGRect) -> CGRect {
+      super.editingRect(forBounds: bounds.insetBy(dx: 14, dy: 0))
+    }
+  }
+
+  final class Coordinator: NSObject, UITextFieldDelegate {
+    var input: CredentialInput
+    init(_ input: CredentialInput) { self.input = input }
+    @objc func changed(_ field: UITextField) { input.text = field.text ?? "" }
+    func textFieldDidBeginEditing(_ field: UITextField) {
+      if input.focused != input.kind { input.focused = input.kind }
+    }
+    func textFieldDidEndEditing(_ field: UITextField) {
+      if input.focused == input.kind { input.focused = nil }
+    }
+    func textFieldShouldReturn(_ field: UITextField) -> Bool {
+      input.submit()
+      return false
+    }
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+  func makeUIView(context: Context) -> Input {
+    let field = Input()
+    field.font = .preferredFont(forTextStyle: .body)
+    field.adjustsFontForContentSizeCategory = true
+    field.autocorrectionType = .no
+    field.autocapitalizationType = .none
+    field.spellCheckingType = .no
+    field.isSecureTextEntry = kind == .password
+    field.textContentType = kind == .password ? .password : .username
+    field.returnKeyType = kind == .password ? .go : .next
+    field.placeholder =
+      kind == .password ? String(localized: "Password") : String(localized: "Username")
+    field.accessibilityLabel = field.placeholder
+    field.accessibilityIdentifier = kind == .password ? "sign-in-password" : "sign-in-username"
+    field.delegate = context.coordinator
+    field.addTarget(
+      context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+    return field
+  }
+
+  func updateUIView(_ field: Input, context: Context) {
+    context.coordinator.input = self
+    if field.text != text { field.text = text }
+    field.isEnabled = enabled
+    if focused == kind, enabled, !field.isFirstResponder, field.window != nil {
+      field.becomeFirstResponder()
+    } else if focused == nil, field.isFirstResponder {
+      field.resignFirstResponder()
+    }
+  }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, uiView: Input, context: Context) -> CGSize? {
+    CGSize(
+      width: proposal.width ?? max(0, uiView.intrinsicContentSize.width),
+      height: max(SignInControl.height, ceil(uiView.font?.lineHeight ?? 0) + 24))
   }
 }
 
@@ -124,8 +208,7 @@ struct PasswordSignIn: View {
   @Binding var username: String
   @State private var password = ""
   @State private var submitting = false
-  @FocusState private var field: Field?
-  private enum Field { case username, password }
+  @State private var field: CredentialInput.Kind?
 
   var body: some View {
     SignInPage("Sign in with a password") {
@@ -136,20 +219,12 @@ struct PasswordSignIn: View {
       Text("Use your Jellyfin account on \(server.url.absoluteString).").foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 6) {
         Text("Username").font(.subheadline.weight(.semibold))
-        TextField("Username", text: $username).textContentType(.username)
-          .textInputAutocapitalization(.never).autocorrectionDisabled().focused(
-            $field, equals: .username
-          )
-          .submitLabel(.next).onSubmit { field = .password }
-          .signInField(focused: field == .username) { field = .username }
-          .accessibilityIdentifier("sign-in-username")
+        CredentialInput(.username, text: $username, focused: $field) { field = .password }
+          .frame(maxWidth: .infinity).signInFieldSurface(focused: field == .username)
         Text("Password").font(.subheadline.weight(.semibold)).padding(.top, 8)
         HStack(spacing: 4) {
-          SecureField("Password", text: $password).textContentType(.password)
-            .textInputAutocapitalization(.never).autocorrectionDisabled()
-            .focused($field, equals: .password).submitLabel(.go).onSubmit(submit)
-            .signInField(focused: field == .password) { field = .password }
-            .accessibilityIdentifier("sign-in-password")
+          CredentialInput(.password, text: $password, focused: $field, submit: submit)
+            .frame(maxWidth: .infinity).signInFieldSurface(focused: field == .password)
           SignInForward(
             title: submitting ? "Signing in…" : "Sign in", busy: submitting, action: submit
           )

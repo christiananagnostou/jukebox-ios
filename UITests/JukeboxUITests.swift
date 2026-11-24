@@ -3780,15 +3780,12 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(accounts.waitForExistence(timeout: 5))
   }
-  @MainActor func testFirstDeviceSignsInWithPasswordWhenCodesAreDisabled() async throws {
-    continueAfterFailure = false
-    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+  @MainActor private func openPasswordFixture(in app: XCUIApplication) async throws -> String {
     app.launchArguments = [
       "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
       "--quick-connect-fixture", "--codes-disabled",
     ]
     app.launch()
-    defer { app.terminate() }
     let address = app.textFields["sign-in-server"]
     XCTAssertTrue(address.waitForExistence(timeout: 8))
     XCTAssertFalse(app.textFields["Username"].exists)
@@ -3797,6 +3794,14 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["sign-in-continue"].tap()
     XCTAssertTrue(app.staticTexts["sign-in-codes-disabled"].waitForExistence(timeout: 6))
     XCTAssertFalse(app.buttons["sign-in-show-code"].exists)
+    return url
+  }
+
+  @MainActor func testFirstDeviceSignsInWithPasswordWhenCodesAreDisabled() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
     let username = app.textFields["sign-in-username"]
     let password = app.secureTextFields["sign-in-password"]
     let submit = app.buttons["sign-in-password-submit"]
@@ -3811,12 +3816,27 @@ final class JukeboxUITests: XCTestCase {
         image, screen: screen, xOffset: arrowFrame.midX - screen.minX, y: y)
       XCTAssertGreaterThan(color[2] - color[0], 12, "The circle must reach both field edges")
     }
-    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    try await typeAccountText(
+      "Listener", into: username, in: app, expecting: "Listener", verticalOffset: 22)
     try await typeAccountText("fixture", into: password, in: app, verticalOffset: -22)
     XCTAssertEqual(username.value as? String, "Listener")
     submit.tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+    openAccountAction("Connection details", in: app)
+    XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
+    XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)
+  }
+
+  @MainActor func testPasswordSignInWithKeyboardNextAndGo() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    username.typeText("\n")
+    app.secureTextFields["sign-in-password"].typeText("fixture\n")
     openAccountAction("Connection details", in: app)
     XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
     XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)

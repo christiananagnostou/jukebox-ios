@@ -4223,7 +4223,7 @@ extension JukeboxUITests {
     let sharing = app.buttons["playlist-sharing"]
     XCTAssertTrue(sharing.waitForExistence(timeout: 5))
     sharing.tap()
-    let visibility = app.switches["playlist-public"]
+    let visibility = app.switches["playlist-public"].firstMatch
     XCTAssertTrue(visibility.waitForExistence(timeout: 5))
     XCTAssertEqual(visibility.value as? String, "0")
     app.navigationBars.buttons["Back"].firstMatch.tap()
@@ -4233,6 +4233,7 @@ extension JukeboxUITests {
     app.navigationBars.buttons["Back"].firstMatch.tap()
     app.buttons["playlist-editor-done"].tap()
     XCTAssertTrue(rows[2].waitForExistence(timeout: 5))
+    XCTAssertTrue(rows[1].wait(for: \.label, toEqual: original[2], timeout: 5))
     XCTAssertEqual(rows.map(\.label), [original[0], original[2], original[1]])
     app.navigationBars.buttons["Back"].firstMatch.tap()
     XCTAssertTrue(heading.wait(for: \.label, toEqual: "Morning rotation", timeout: 5))

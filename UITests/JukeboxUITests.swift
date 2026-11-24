@@ -1,4 +1,5 @@
 import UIKit
+import Vision
 import XCTest
 
 final class JukeboxUITests: XCTestCase {
@@ -3994,7 +3995,7 @@ final class JukeboxUITests: XCTestCase {
     continueAfterFailure = false
     let app = launchSavedConnections()
     defer { app.terminate() }
-    let menu = app.buttons["Accounts"]
+    let menu = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     let rows = app.buttons.matching(
       NSPredicate(
         format: "identifier BEGINSWITH %@ OR label BEGINSWITH %@", "saved-connection-",
@@ -4002,6 +4003,12 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(menu.waitForExistence(timeout: 12))
     menu.tap()
     XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 5))
+    for (index, origin) in [
+      "https://music.invalid/jellyfin", "http://music.invalid/jellyfin",
+      "https://offline.invalid/jellyfin",
+    ].enumerated() {
+      try assertMenuAddress(origin, on: rows.element(boundBy: index))
+    }
     rows.element(boundBy: 1).tap()
     let address = app.staticTexts["connection-server-address"]
     XCTAssertTrue(address.waitForExistence(timeout: 5))
@@ -4042,11 +4049,30 @@ final class JukeboxUITests: XCTestCase {
     }
   }
 
+  @MainActor private func assertMenuAddress(_ address: String, on row: XCUIElement) throws {
+    let combined = [row.label, row.value as? String ?? ""].joined(separator: " ")
+    if combined.contains(address) { return }
+    let text = row.descendants(matching: .any).matching(
+      NSPredicate(format: "label CONTAINS %@ OR value == %@", address, address))
+    if text.firstMatch.exists { return }
+    let screenshot = row.screenshot()
+    let attachment = XCTAttachment(screenshot: screenshot)
+    attachment.name = "Sample saved connection row"
+    add(attachment)
+    let recognition = VNRecognizeTextRequest()
+    recognition.recognitionLevel = .accurate
+    recognition.usesLanguageCorrection = false
+    let image = try XCTUnwrap(screenshot.image.cgImage)
+    try VNImageRequestHandler(cgImage: image).perform([recognition])
+    let visible = recognition.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
+    XCTAssertTrue(visible.joined().replacingOccurrences(of: " ", with: "").contains(address))
+  }
+
   @MainActor func testAccountMenuQuickConnectAndSignOutAppearance() throws {
     continueAfterFailure = false
     let app = launchSavedConnections()
     defer { app.terminate() }
-    let account = app.buttons["Accounts"]
+    let account = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(account.waitForExistence(timeout: 12))
     account.tap()
     let approve = app.buttons["Quick Connect"]

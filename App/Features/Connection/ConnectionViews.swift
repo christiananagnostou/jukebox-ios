@@ -142,9 +142,9 @@ struct LoginScreen: View {
             }
             .frame(maxWidth: .infinity, minHeight: MusicUI.target, alignment: .leading)
             .contentShape(.rect)
-            .accessibilityLabel(Text(verbatim: connection.username))
-            .accessibilityValue(Text(verbatim: connection.server.url.absoluteString))
           }
+          .accessibilityLabel(Text(verbatim: connection.username))
+          .accessibilityValue(Text(verbatim: connection.server.url.absoluteString))
           Button {
             selectedConnection = connection
           } label: {
@@ -152,6 +152,7 @@ struct LoginScreen: View {
               minWidth: MusicUI.target, minHeight: MusicUI.target)
           }
           .accessibilityLabel("Connection details for \(connection.username)")
+          .accessibilityValue(Text(verbatim: connection.server.url.absoluteString))
         }
       }
     }.disabled(store.busy || checking != nil)

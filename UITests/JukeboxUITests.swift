@@ -3669,12 +3669,22 @@ final class JukeboxUITests: XCTestCase {
     ]
     app.launch()
     defer { app.terminate() }
+    func focusForTyping(_ field: XCUIElement) -> Bool {
+      let keyboard = app.keyboards.firstMatch
+      for _ in 0..<2 {
+        guard field.wait(for: \.isHittable, toEqual: true, timeout: 4) else { return false }
+        field.tap()
+        if keyboard.waitForExistence(timeout: 3) || field.hasFocus { return true }
+      }
+      return false
+    }
     let address = app.textFields["Server address"]
     let start = app.buttons["Sign in with Quick Connect"]
     XCTAssertTrue(address.waitForExistence(timeout: 8))
     XCTAssertFalse(start.isEnabled)
-    address.tap()
+    XCTAssertTrue(focusForTyping(address), "The server address field did not receive input focus")
     address.typeText("https://music.invalid/jellyfin")
+    XCTAssertEqual(address.value as? String, "https://music.invalid/jellyfin")
     start.tap()
     let code = app.staticTexts["quick-connect-code"]
     XCTAssertTrue(code.waitForExistence(timeout: 5))
@@ -3698,10 +3708,10 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(field.waitForExistence(timeout: 5))
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
-        NSPredicate(format: "label CONTAINS %@", "Demo listener")
+        NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
       ).firstMatch.exists)
     XCTAssertFalse(approve.isEnabled)
-    field.tap()
+    XCTAssertTrue(focusForTyping(field), "The approval code field did not receive input focus")
     field.typeText("999999")
     XCTAssertTrue(approve.isEnabled)
     approve.tap()
@@ -3709,7 +3719,7 @@ final class JukeboxUITests: XCTestCase {
       .firstMatch
     XCTAssertTrue(error.waitForExistence(timeout: 5))
     XCTAssertTrue(error.label.contains("invalid or has expired"))
-    field.tap()
+    XCTAssertTrue(focusForTyping(field), "The approval code field did not receive input focus")
     field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6))
     field.typeText("246810")
     XCTAssertTrue(approve.isEnabled)

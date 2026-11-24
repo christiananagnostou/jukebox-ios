@@ -127,12 +127,9 @@ private struct CredentialInput: UIViewRepresentable {
       layer.borderColor = color.resolvedColor(with: traitCollection).cgColor
       layer.borderWidth = isFirstResponder ? 2 : 1
     }
-    @objc func focusOnTap() {
-      if isEnabled, !isFirstResponder { becomeFirstResponder() }
-    }
   }
 
-  final class Coordinator: NSObject, UITextFieldDelegate, UIGestureRecognizerDelegate {
+  final class Coordinator: NSObject, UITextFieldDelegate {
     var input: CredentialInput
     init(_ input: CredentialInput) { self.input = input }
     @objc func changed(_ field: UITextField) {
@@ -147,10 +144,6 @@ private struct CredentialInput: UIViewRepresentable {
       }
       return false
     }
-    func gestureRecognizer(
-      _ gestureRecognizer: UIGestureRecognizer,
-      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool { true }
   }
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -170,6 +163,7 @@ private struct CredentialInput: UIViewRepresentable {
       fields.username = field
       field.text = username.wrappedValue
       field.textContentType = .username
+      field.inlinePredictionType = .no
       field.returnKeyType = .next
       field.placeholder = String(localized: "Username")
       field.accessibilityIdentifier = "sign-in-username"
@@ -185,10 +179,6 @@ private struct CredentialInput: UIViewRepresentable {
     }
     field.accessibilityLabel = field.placeholder
     field.delegate = context.coordinator
-    let tap = UITapGestureRecognizer(target: field, action: #selector(Input.focusOnTap))
-    tap.cancelsTouchesInView = false
-    tap.delegate = context.coordinator
-    field.addGestureRecognizer(tap)
     return field
   }
 

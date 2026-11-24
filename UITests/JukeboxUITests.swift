@@ -3697,7 +3697,8 @@ final class JukeboxUITests: XCTestCase {
   }
 
   @MainActor private func tapAccountField(
-    _ field: XCUIElement, in app: XCUIApplication, verticalOffset: CGFloat
+    _ field: XCUIElement, in app: XCUIApplication, verticalOffset: CGFloat,
+    horizontalFraction: CGFloat = 0.5
   ) async throws {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(5))
@@ -3705,7 +3706,7 @@ final class JukeboxUITests: XCTestCase {
     while clock.now < deadline {
       let frame = field.frame
       if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
-        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        field.coordinate(withNormalizedOffset: CGVector(dx: horizontalFraction, dy: 0.5))
           .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
         return
       }
@@ -3821,30 +3822,63 @@ final class JukeboxUITests: XCTestCase {
     try await typeAccountText(
       "Listener", into: username, in: app, expecting: "Listener", verticalOffset: 22)
     let keyboardImage = try XCTUnwrap(app.screenshot().image.cgImage)
-    let fieldEdgeColor = try screenColor(
-      image, screen: screen, xOffset: fieldFrame.midX - screen.minX, y: fieldFrame.minY + 4)
-    let keyboardEdgeColor = try screenColor(
-      keyboardImage, screen: screen, xOffset: password.frame.midX - screen.minX,
-      y: password.frame.minY + 4)
-    try await tapAccountField(password, in: app, verticalOffset: -22)
+    let fractions: [CGFloat] = [0.5, 0.92, 0.08, 0.75, 0.25]
+    let keyboardFrame = password.frame
+    let uncovered = try fractions.filter { fraction in
+      let reference = try screenColor(
+        image, screen: screen, xOffset: fieldFrame.minX - screen.minX + fieldFrame.width * fraction,
+        y: fieldFrame.minY + 4)
+      let current = try screenColor(
+        keyboardImage, screen: screen,
+        xOffset: keyboardFrame.minX - screen.minX + keyboardFrame.width * fraction,
+        y: keyboardFrame.minY + 4)
+      return zip(reference, current).allSatisfy { abs($0.0 - $0.1) <= 3 }
+    }
+    let fraction = try XCTUnwrap(
+      uncovered.first, "The keyboard covered the entire tested upper edge")
+    XCTContext.runActivity(
+      named: "Uncovered password edge fraction \(fraction), matches \(uncovered.count)"
+    ) { _ in }
+    try await tapAccountField(
+      password, in: app, verticalOffset: 4 - keyboardFrame.height / 2, horizontalFraction: fraction)
     let tapped = try XCTUnwrap(app.screenshot().image.cgImage)
-    let passwordBorder = try screenColor(
+    let border = try screenColor(
       tapped, screen: screen, xOffset: password.frame.midX - screen.minX, y: password.frame.minY + 1
-    )
-    let usernameBorder = try screenColor(
-      tapped, screen: screen, xOffset: username.frame.midX - screen.minX, y: username.frame.minY + 1
     )
     app.typeText("fixture")
     XCTAssertTrue((username.value as? String) == "Listener", "Password input changed Username")
     submit.tap()
+    assertPasswordFixtureAccount(
+      in: app, server: url, message: "Password border after tap \(border)")
+  }
+
+  @MainActor func testPasswordCenterEdgeWithKeyboardAlreadyOpen() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    defer { app.terminate() }
+    let url = try await openPasswordFixture(in: app)
+    let username = app.textFields["sign-in-username"]
+    let password = app.secureTextFields["sign-in-password"]
+    try await tapAccountField(username, in: app, verticalOffset: 22)
+    XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+    try await tapAccountField(password, in: app, verticalOffset: 4 - password.frame.height / 2)
+    app.typeText("fixture")
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    app.buttons["sign-in-password-submit"].tap()
+    assertPasswordFixtureAccount(in: app, server: url)
+  }
+
+  @MainActor private func assertPasswordFixtureAccount(
+    in app: XCUIApplication, server: String, message: String = "",
+    file: StaticString = #filePath, line: UInt = #line
+  ) {
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
-    XCTAssertTrue(
-      accounts.waitForExistence(timeout: 10),
-      "Password edge RGB before/after the keyboard \(fieldEdgeColor)/\(keyboardEdgeColor). Username/password focus borders after the tap \(usernameBorder)/\(passwordBorder)."
-    )
+    XCTAssertTrue(accounts.waitForExistence(timeout: 10), message, file: file, line: line)
     openAccountAction("Connection details", in: app)
-    XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
-    XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)
+    XCTAssertEqual(
+      app.staticTexts["connection-username"].label, "Demo listener", file: file, line: line)
+    XCTAssertEqual(
+      app.staticTexts["connection-server-address"].label, server, file: file, line: line)
   }
 
   @MainActor func testPasswordSignInWithKeyboardNextAndGo() async throws {
@@ -3856,9 +3890,7 @@ final class JukeboxUITests: XCTestCase {
     try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
     username.typeText("\n")
     app.secureTextFields["sign-in-password"].typeText("fixture\n")
-    openAccountAction("Connection details", in: app)
-    XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
-    XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)
+    assertPasswordFixtureAccount(in: app, server: url)
   }
 
   @MainActor func testQuickConnectSignsInAndOutOfAnIsolatedLiveAccount() async throws {

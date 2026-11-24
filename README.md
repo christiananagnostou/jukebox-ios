@@ -6,7 +6,7 @@ Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in t
 
 1. On a Mac with Xcode and the iOS 27 SDK, run `python3 -B -m tools.prepare` from the repository root to generate the bundled demo media. Regenerating any missing encoded test audio requires FFmpeg.
 2. Open `Jukebox.xcodeproj` and select the **Jukebox** scheme. For a physical device, select your development team and a bundle identifier you can sign.
-3. Run the app. Enter your Jellyfin server’s HTTPS address, including any base path, and tap **Continue**. You can also choose **Try invented music** to explore the demo.
+3. Run the app. Enter your Jellyfin server’s HTTPS address, including any base path, and tap the arrow beside it or press **Continue** on the keyboard. You can also choose **Try invented music** to explore the demo.
 
 To see your saved server address and username, open **Accounts → Connection details**. On the Connect screen, tap the information button beside a saved account. Viewing these details works offline.
 

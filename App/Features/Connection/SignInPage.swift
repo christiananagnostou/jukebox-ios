@@ -23,26 +23,64 @@ struct SignInPage<Content: View>: View {
   }
 }
 
-struct SignInButton: View {
-  let title: LocalizedStringKey
-  let action: () -> Void
+enum SignInControl {
+  static let height: CGFloat = 52
+}
 
-  init(_ title: LocalizedStringKey, action: @escaping () -> Void) {
-    self.title = title
-    self.action = action
-  }
+struct SignInForward: View {
+  let title: LocalizedStringKey
+  let busy: Bool
+  let action: () -> Void
 
   var body: some View {
     Button(action: action) {
-      Text(title).font(.headline)
-        .frame(maxWidth: .infinity, minHeight: MusicUI.target)
+      Group {
+        if busy {
+          ProgressView().tint(MusicUI.tint)
+        } else {
+          Image(systemName: "arrow.forward.circle.fill").font(.title)
+            .foregroundStyle(MusicUI.tint)
+        }
+      }
+      .frame(minWidth: SignInControl.height, minHeight: SignInControl.height)
+      .contentShape(.rect)
     }
-    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-    .tint(MusicUI.tint).foregroundStyle(MusicUI.onTint)
+    .buttonStyle(MusicButtonStyle()).accessibilityLabel(Text(title))
+  }
+}
+
+struct SignInActionRow: View {
+  let title: LocalizedStringKey
+  var symbol = "chevron.forward"
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 10) {
+        Text(title).font(.body.weight(.semibold)).multilineTextAlignment(.leading)
+        Spacer(minLength: 4)
+        Image(systemName: symbol).font(.callout.weight(.semibold)).accessibilityHidden(true)
+      }
+      .frame(minHeight: MusicUI.target).contentShape(.rect)
+    }
+    .buttonStyle(MusicButtonStyle()).foregroundStyle(MusicUI.tint)
   }
 }
 
 extension View {
+  func signInField(focused: Bool, focus: @escaping () -> Void) -> some View {
+    let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
+    return textFieldStyle(.plain)
+      .padding(.horizontal, 14).padding(.vertical, 12)
+      .frame(maxWidth: .infinity, minHeight: SignInControl.height, alignment: .leading)
+      .background {
+        shape.fill(MusicUI.panel).onTapGesture(perform: focus).accessibilityHidden(true)
+      }
+      .overlay {
+        shape.strokeBorder(focused ? MusicUI.tint : MusicUI.border, lineWidth: focused ? 2 : 1)
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+  }
+
   func signInHelp() -> some View {
     font(.footnote).foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
@@ -66,12 +104,12 @@ struct SignInMethods: View {
         Text("Already signed in elsewhere?").font(.headline)
         Text("Use that browser or device to approve this sign-in.").foregroundStyle(.secondary)
       }.padding(.top, 8)
-      SignInButton("Show a sign-in code", action: showCode)
+      SignInActionRow(title: "Show a sign-in code", action: showCode)
         .accessibilityIdentifier("sign-in-show-code")
       Divider().padding(.vertical, 4)
       VStack(alignment: .leading, spacing: 0) {
         Text("First device?").font(.headline)
-        Button("Use username and password", action: usePassword).frame(minHeight: MusicUI.target)
+        SignInActionRow(title: "Use username and password", action: usePassword)
           .accessibilityIdentifier("sign-in-password-method")
       }
     }
@@ -102,13 +140,19 @@ struct PasswordSignIn: View {
             $field, equals: .username
           )
           .submitLabel(.next).onSubmit { field = .password }
+          .signInField(focused: field == .username) { field = .username }
         Text("Password").font(.subheadline.weight(.semibold)).padding(.top, 8)
-        SecureField("Password", text: $password).textContentType(.password)
-          .focused($field, equals: .password).submitLabel(.go).onSubmit(submit)
-      }.textFieldStyle(.roundedBorder).disabled(submitting)
-      SignInButton(submitting ? "Signing in…" : "Sign in", action: submit)
-        .disabled(submitting || store.busy || username.isEmpty || store.pendingSignOut != nil)
-        .accessibilityIdentifier("sign-in-password-submit")
+        HStack(spacing: 4) {
+          SecureField("Password", text: $password).textContentType(.password)
+            .focused($field, equals: .password).submitLabel(.go).onSubmit(submit)
+            .signInField(focused: field == .password) { field = .password }
+          SignInForward(
+            title: submitting ? "Signing in…" : "Sign in", busy: submitting, action: submit
+          )
+          .disabled(submitting || store.busy || username.isEmpty || store.pendingSignOut != nil)
+          .accessibilityIdentifier("sign-in-password-submit")
+        }
+      }.disabled(submitting)
       DisclosureGroup("Need an account or password?") {
         Text(
           "Ask the person who manages this Jellyfin server to create an account for you or help you reset your password."

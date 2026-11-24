@@ -29,11 +29,19 @@ struct LoginScreen: View {
           .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 8) {
           Text("Server address").font(.subheadline.weight(.semibold))
-          TextField("Server address", text: $address, prompt: Text("https://music.example.org"))
-            .textContentType(.URL).keyboardType(.URL).autocorrectionDisabled()
-            .textInputAutocapitalization(.never).textFieldStyle(.roundedBorder)
-            .focused($editingAddress).submitLabel(.continue).onSubmit(beginCheck)
-            .accessibilityIdentifier("sign-in-server")
+          HStack(spacing: 4) {
+            TextField("Server address", text: $address, prompt: Text("https://music.example.org"))
+              .textContentType(.URL).keyboardType(.URL).autocorrectionDisabled()
+              .textInputAutocapitalization(.never).focused($editingAddress)
+              .submitLabel(.continue).onSubmit(beginCheck)
+              .signInField(focused: editingAddress) { editingAddress = true }
+              .accessibilityIdentifier("sign-in-server")
+            SignInForward(
+              title: checking == nil ? "Continue" : "Checking server…", busy: checking != nil,
+              action: beginCheck
+            )
+            .disabled(!mayContinue).accessibilityIdentifier("sign-in-continue")
+          }
           if let problem {
             Text(problem).foregroundStyle(.secondary).accessibilityIdentifier(
               "sign-in-server-error")
@@ -45,8 +53,6 @@ struct LoginScreen: View {
               .foregroundStyle(.secondary)
           }
         }
-        SignInButton(checking == nil ? "Continue" : "Checking server…", action: beginCheck)
-          .disabled(!mayContinue).accessibilityIdentifier("sign-in-continue")
         DisclosureGroup("Where do I find this address?") {
           Text(
             "In Jukebox on a signed-in device, open Accounts → Connection details. In a browser, use the HTTPS address before /web, including any path such as /jellyfin. If someone invited you, ask them for the address."

@@ -3670,8 +3670,23 @@ final class JukeboxUITests: XCTestCase {
     }
     XCTFail("The Accounts menu did not present \(title)")
   }
+  @MainActor private func checkForwardField(_ field: XCUIElement, arrow: XCUIElement) {
+    let input = field.frame
+    let button = arrow.frame
+    XCTContext.runActivity(named: "Input and forward arrow \(input) \(button)") { _ in
+      XCTAssertGreaterThanOrEqual(button.width, 44)
+      XCTAssertLessThanOrEqual(button.width, 64)
+      XCTAssertGreaterThanOrEqual(button.height, 48)
+      XCTAssertEqual(button.midY, input.midY, accuracy: 2)
+      XCTAssertGreaterThanOrEqual(button.minX, input.maxX - 1)
+      XCTAssertGreaterThan(input.width, button.width * 2)
+    }
+  }
+
   @MainActor private func typeAccountText(
-    _ text: String, into field: XCUIElement, in app: XCUIApplication, expecting value: String? = nil
+    _ text: String, into field: XCUIElement, in app: XCUIApplication,
+    expecting value: String? = nil,
+    verticalOffset: CGFloat = 0
   ) async throws {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(5))
@@ -3679,7 +3694,8 @@ final class JukeboxUITests: XCTestCase {
     while clock.now < deadline {
       let frame = field.frame
       if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
-        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+          .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
         app.typeText(text)
         if let value { XCTAssertEqual(field.value as? String, value) }
         return
@@ -3704,10 +3720,13 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertFalse(next.isEnabled)
     XCTAssertFalse(start.exists)
     XCTAssertFalse(app.secureTextFields.firstMatch.exists)
+    checkForwardField(address, arrow: next)
     let url = "https://music.invalid/jellyfin"
-    try await typeAccountText(url, into: address, in: app, expecting: url)
+    try await typeAccountText(url, into: address, in: app, expecting: url, verticalOffset: -22)
     next.tap()
     XCTAssertTrue(start.waitForExistence(timeout: 8))
+    XCTAssertEqual(start.label, "Show a sign-in code")
+    XCTAssertGreaterThanOrEqual(start.frame.height, 44)
     XCTAssertTrue(app.buttons["sign-in-password-method"].exists)
     start.tap()
     let code = app.staticTexts["quick-connect-code"]
@@ -3729,6 +3748,8 @@ final class JukeboxUITests: XCTestCase {
     let field = app.textFields["quick-connect-input"]
     let approve = app.buttons["quick-connect-submit"]
     XCTAssertTrue(field.waitForExistence(timeout: 5))
+    XCTAssertEqual(approve.label, "Approve")
+    XCTAssertGreaterThanOrEqual(approve.frame.height, 44)
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
         NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
@@ -3765,15 +3786,17 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(address.waitForExistence(timeout: 8))
     XCTAssertFalse(app.textFields["Username"].exists)
     let url = "https://music.invalid/jellyfin"
-    try await typeAccountText(url, into: address, in: app, expecting: url)
+    try await typeAccountText(url, into: address, in: app, expecting: url, verticalOffset: 22)
     app.buttons["sign-in-continue"].tap()
     XCTAssertTrue(app.staticTexts["sign-in-codes-disabled"].waitForExistence(timeout: 6))
     XCTAssertFalse(app.buttons["sign-in-show-code"].exists)
     let username = app.textFields["Username"]
-    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
     let password = app.secureTextFields["Password"]
-    try await typeAccountText("fixture", into: password, in: app)
-    app.buttons["sign-in-password-submit"].tap()
+    let submit = app.buttons["sign-in-password-submit"]
+    checkForwardField(password, arrow: submit)
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    try await typeAccountText("fixture", into: password, in: app, verticalOffset: -22)
+    submit.tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 10))
     openAccountAction("Connection details", in: app)

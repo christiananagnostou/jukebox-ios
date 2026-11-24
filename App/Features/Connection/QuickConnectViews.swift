@@ -56,12 +56,12 @@ struct QuickConnectSignIn: View {
         }
       case .failed(let message):
         Label(message, systemImage: "exclamationmark.circle")
-        SignInButton("Get a new code") {
+        SignInActionRow(title: "Get a new code", symbol: "arrow.clockwise") {
           phase = .starting
           attempt = UUID()
         }
       }
-      Button("Use my password instead") { usePassword(false) }.frame(minHeight: MusicUI.target)
+      SignInActionRow(title: "Use my password instead") { usePassword(false) }
     }
     .task(id: attempt) {
       let current = attempt
@@ -86,6 +86,7 @@ struct QuickConnectApproval: View {
   let account: Connection
   @Environment(\.dismiss) private var dismiss
   @FocusState private var editing: Bool
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var input = ""
   @State private var phase = Phase.entry
 
@@ -113,30 +114,43 @@ struct QuickConnectApproval: View {
         } else {
           Text("Enter the code shown on the device you want to sign in.").foregroundStyle(
             .secondary)
+          Text(
+            "Approving signs that device in as **\(account.username)** on \(account.server.url.absoluteString)."
+          )
+          .font(.footnote).accessibilityIdentifier("quick-connect-grant")
           VStack(alignment: .leading, spacing: 6) {
             Text("Code from the other device").font(.subheadline.weight(.semibold))
-            TextField("Six-digit code", text: $input, prompt: Text("000 000"))
-              .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($editing)
-              .font(.title2.monospacedDigit()).textFieldStyle(.roundedBorder).disabled(submitting)
-              .accessibilityIdentifier("quick-connect-input").autocorrectionDisabled()
-              .privacySensitive()
-              .onChange(of: input) { if case .failed = phase { phase = .entry } }
+            let layout =
+              typeSize.isAccessibilitySize
+              ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+              : AnyLayout(HStackLayout(spacing: 8))
+            layout {
+              TextField("Six-digit code", text: $input, prompt: Text("000 000"))
+                .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($editing)
+                .font(.title2.monospacedDigit())
+                .signInField(focused: editing) { editing = true }.disabled(submitting)
+                .accessibilityIdentifier("quick-connect-input").autocorrectionDisabled()
+                .privacySensitive()
+                .onChange(of: input) { if case .failed = phase { phase = .entry } }
+              Button {
+                guard !submitting, let code = QuickConnectCode(input) else { return }
+                editing = false
+                phase = .submitting(code)
+              } label: {
+                Text(submitting ? "Approving…" : "Approve")
+                  .font(.headline).padding(.horizontal, 6)
+                  .frame(minWidth: MusicUI.target, minHeight: SignInControl.height)
+                  .contentShape(.rect)
+              }
+              .buttonStyle(MusicButtonStyle()).foregroundStyle(MusicUI.tint)
+              .disabled(submitting || QuickConnectCode(input) == nil)
+              .accessibilityIdentifier("quick-connect-submit")
+            }
           }
           if case .failed(let message) = phase {
             Label(message, systemImage: "exclamationmark.circle")
               .accessibilityIdentifier("quick-connect-approval-error")
           }
-          Text(
-            "Approving signs that device in as **\(account.username)** on \(account.server.url.absoluteString)."
-          )
-          .font(.footnote).accessibilityIdentifier("quick-connect-grant")
-          SignInButton(submitting ? "Approving…" : "Approve sign-in") {
-            guard !submitting, let code = QuickConnectCode(input) else { return }
-            editing = false
-            phase = .submitting(code)
-          }
-          .disabled(submitting || QuickConnectCode(input) == nil)
-          .accessibilityIdentifier("quick-connect-submit")
         }
       }
       .toolbar {

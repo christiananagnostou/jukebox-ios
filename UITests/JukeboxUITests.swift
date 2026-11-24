@@ -3820,7 +3820,7 @@ final class JukeboxUITests: XCTestCase {
     }
     try await typeAccountText(
       "Listener", into: username, in: app, expecting: "Listener", verticalOffset: 22)
-    dismissUsernameSuggestions(in: app)
+    dismissCredentialSuggestions(in: app)
     password.tap()
     try recordPasswordFocus(password, in: app)
     password.typeText("fixture")
@@ -3840,7 +3840,7 @@ final class JukeboxUITests: XCTestCase {
     XCTContext.runActivity(named: "Password focus border \(border)") { _ in }
   }
 
-  @MainActor private func dismissUsernameSuggestions(in app: XCUIApplication) {
+  @MainActor private func dismissCredentialSuggestions(in app: XCUIApplication) {
     let bar = app.navigationBars.firstMatch
     XCTAssertTrue(bar.waitForExistence(timeout: 5))
     bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -3867,10 +3867,12 @@ final class JukeboxUITests: XCTestCase {
     let url = try await openPasswordFixture(in: app)
     let username = app.textFields["sign-in-username"]
     let password = app.secureTextFields["sign-in-password"]
-    let baseline = try passwordEdgeColors(password, in: app)
-    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    try await tapAccountField(username, in: app, verticalOffset: 0)
     XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-    dismissUsernameSuggestions(in: app)
+    let baseline = try passwordEdgeColors(password, in: app)
+    username.typeText("Listener")
+    XCTAssertEqual(username.value as? String, "Listener")
+    dismissCredentialSuggestions(in: app)
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: .seconds(4))
     var clearSamples = 0
@@ -3886,11 +3888,12 @@ final class JukeboxUITests: XCTestCase {
     try await tapAccountField(password, in: app, verticalOffset: 4 - password.frame.height / 2)
     try recordPasswordFocus(password, in: app)
     password.typeText("fixture")
+    dismissCredentialSuggestions(in: app)
     app.buttons["sign-in-password-submit"].tap()
     assertPasswordFixtureAccount(in: app, server: url)
   }
 
-  @MainActor func testPasswordArrowSubmitsKeyboardEnteredCredentials() async throws {
+  @MainActor func testPasswordArrowSubmitsAfterDismissingSuggestions() async throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
     defer { app.terminate() }
@@ -3899,6 +3902,7 @@ final class JukeboxUITests: XCTestCase {
     try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
     username.typeText("\n")
     app.secureTextFields["sign-in-password"].typeText("fixture")
+    dismissCredentialSuggestions(in: app)
     app.buttons["sign-in-password-submit"].tap()
     assertPasswordFixtureAccount(in: app, server: url)
   }

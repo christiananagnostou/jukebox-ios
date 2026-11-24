@@ -166,13 +166,27 @@ import SwiftUI
     engine = native
     let vault = startup.2
     vaultForAcceptance = vault
+    let accountFixture: (any HTTPTransport)?
+    #if DEBUG
+      if case .interactive = transport, args.contains("--quick-connect-fixture") {
+        accountFixture = QuickConnectFixtureHTTP()
+      } else {
+        accountFixture = nil
+      }
+    #else
+      accountFixture = nil
+    #endif
     let model = PlayerStore(
       storage: storage, vault: vault, driver: native, deviceID: deviceID, diagnostics: diagnostics,
+      authenticationTransport: accountFixture ?? LiveHTTP(),
       prepareCover: { bytes in
         await Task.detached(priority: .utility) { MusicCoverThumbnail.make(bytes) }.value
       },
       artworkTone: { await CoverArt.tone(from: $0) },
-      factory: { try JellyfinClient(connection: $0, token: $1, deviceID: deviceID) })
+      factory: {
+        try JellyfinClient(
+          connection: $0, token: $1, deviceID: deviceID, transport: accountFixture ?? LiveHTTP())
+      })
     native.onRemote = { [weak model] action in model?.handleRemote(action) }
     store = model
     let catalogFixture = FixtureCatalog(
@@ -210,7 +224,18 @@ import SwiftUI
                 runID: runID, store: store, native: engine, vault: vaultForAcceptance,
                 fixture: fixture)
             case .interactive:
-              await store.enterFixture(service: fixture)
+              if arguments.contains("--quick-connect-fixture") {
+                await store.bootstrap(autoConnect: false)
+              } else if arguments.contains("--saved-account-fixture") {
+                if let server = try? ServerAddress("http://offline.invalid/music") {
+                  let account = Connection(
+                    server: server, userID: "offline-listener", username: "Offline listener")
+                  try? await storageForAcceptance.saveConnections([account])
+                }
+                await store.bootstrap(autoConnect: false)
+              } else {
+                await store.enterFixture(service: fixture)
+              }
             case .cleanup(let runID):
               let documents = FileManager.default.urls(
                 for: .documentDirectory, in: .userDomainMask)[0]

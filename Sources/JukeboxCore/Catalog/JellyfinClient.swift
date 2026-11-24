@@ -319,55 +319,11 @@ actor JellyfinClient {
     transport: any HTTPTransport = LiveHTTP(),
     allowedFamilies: Set<String> = ServerCompatibility.verifiedFamilies
   ) async throws -> (Connection, String) {
-    try server.requireCredentialTransport()
-    var info = URLRequest(url: try server.endpoint("System/Info/Public"))
-    info.setValue("application/json", forHTTPHeaderField: "Accept")
-    let publicReply: HTTPReply
-    do { publicReply = try await transport.send(info) } catch {
-      throw ConnectionStepError(step: .serverInfo, error: error)
-    }
-    guard publicReply.status == 200 else {
-      if publicReply.status == 429 || publicReply.status >= 500 { throw ClientError.unavailable }
-      throw ClientError.notJellyfinServer
-    }
-    guard
-      let publicObject = (try? JSONSerialization.jsonObject(with: publicReply.data))
-        as? [String: Any],
-      let version = publicObject["Version"] as? String, !version.isEmpty
-    else {
-      throw ClientError.notJellyfinServer
-    }
-    guard ServerCompatibility.accepts(version, families: allowedFamilies) else {
-      throw ClientError.unsupportedVersion
-    }
-    try Task.checkCancellation()
-    var request = URLRequest(url: try server.endpoint("Users/AuthenticateByName"))
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(authorization(device: deviceID), forHTTPHeaderField: "Authorization")
-    request.httpBody = try JSONSerialization.data(withJSONObject: [
-      "Username": username, "Pw": password,
-    ])
-    let reply: HTTPReply
-    do { reply = try await transport.send(request) } catch {
-      throw ConnectionStepError(step: .authentication, error: error)
-    }
-    guard (200..<300).contains(reply.status) else {
-      throw ConnectionStepError(
-        step: .authentication, error: ClientError.unauthorized, status: reply.status)
-    }
-    guard let object = (try? JSONSerialization.jsonObject(with: reply.data)) as? [String: Any],
-      let token = object["AccessToken"] as? String,
-      let user = object["User"] as? [String: Any], let id = user["Id"] as? String, !id.isEmpty
-    else { throw ConnectionStepError(step: .authentication, error: ClientError.invalidResponse) }
-    let connection = Connection(
-      server: server, userID: id, username: user["Name"] as? String ?? username)
-    let client = try JellyfinClient(
-      connection: connection, token: token, deviceID: deviceID, transport: transport)
-    try await client.verifyIdentity()
-    return (connection, token)
+    try await JellyfinAuthentication(
+      server: server, deviceID: deviceID, transport: transport, allowedFamilies: allowedFamilies
+    ).password(username: username, password: password)
   }
-  private static func authorization(device: String) -> String {
+  static func authorization(device: String) -> String {
     let safe = device.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     return
       "MediaBrowser Client=\"Jukebox iOS\", Device=\"Jukebox\", DeviceId=\"\(safe)\", Version=\"0.1\""
@@ -644,6 +600,48 @@ private struct MusicViews: Decodable {
     }
   }
 }
+extension JellyfinClient: QuickConnectAuthorizing {
+  func authorizeQuickConnect(
+    _ code: QuickConnectCode, isCurrent: @escaping @MainActor @Sendable () -> Bool = { true }
+  ) async throws {
+    try Task.checkCancellation()
+    var approval = URLRequest(
+      url: try connection.server.endpoint(
+        "QuickConnect/Authorize", query: [.init(name: "code", value: code.digits)]))
+    approval.httpMethod = "POST"
+    approval.cachePolicy = .reloadIgnoringLocalCacheData
+    approval.setValue(authenticatedHeader, forHTTPHeaderField: "Authorization")
+    approval.setValue("application/json", forHTTPHeaderField: "Accept")
+    guard await isCurrent() else { throw QuickConnectError.accountChanged }
+    try Task.checkCancellation()
+    let reply: HTTPReply
+    do { reply = try await transport.send(approval) } catch {
+      try Task.checkCancellation()
+      throw QuickConnectError.unconfirmed
+    }
+    try Task.checkCancellation()
+    switch reply.status {
+    case 200:
+      guard let accepted = try? JSONDecoder().decode(Bool.self, from: reply.data) else {
+        throw QuickConnectError.unconfirmed
+      }
+      guard accepted else { throw QuickConnectError.invalidCode }
+    case 400, 404: throw QuickConnectError.invalidCode
+    case 401:
+      let enabled = try await transport.send(
+        URLRequest(url: try connection.server.endpoint("QuickConnect/Enabled")))
+      try Task.checkCancellation()
+      if enabled.status == 200, (try? JSONDecoder().decode(Bool.self, from: enabled.data)) == false
+      {
+        throw QuickConnectError.disabled
+      }
+      throw ClientError.unauthorized
+    case 403: throw QuickConnectError.denied
+    default: throw QuickConnectError.unconfirmed
+    }
+  }
+}
+
 extension JellyfinClient: MusicCatalogServing {
   func musicLibraries(refresh: Bool = false) async throws -> [MusicLibrary] {
     try await loadMusicLibraries(refresh: refresh, isCurrent: { true })

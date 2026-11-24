@@ -3636,6 +3636,135 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(app.buttons["Open After the last train"].waitForExistence(timeout: 3))
   }
+  @MainActor func testAccountMenuReopensConnectionDetailsAcrossTabs() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = ["--fixture", "--muted", "--transport-ui=" + UUID().uuidString]
+    app.launch()
+    defer { app.terminate() }
+    let tabs = app.tabBars.firstMatch
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    for title in ["Home", "Library", "Search"] {
+      let tab = tabs.buttons[title]
+      XCTAssertTrue(tab.waitForExistence(timeout: 8))
+      tab.tap()
+      XCTAssertTrue(accounts.waitForExistence(timeout: 5))
+      XCTAssertTrue(accounts.isHittable)
+      accounts.tap()
+      app.buttons["Connection details"].tap()
+      let address = app.staticTexts["connection-server-address"]
+      XCTAssertTrue(address.waitForExistence(timeout: 4))
+      XCTAssertEqual(address.label, "https://fixture.invalid")
+      XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
+      app.buttons["Done"].tap()
+      XCTAssertTrue(address.waitForNonExistence(timeout: 4))
+      XCTAssertTrue(tab.isSelected)
+    }
+  }
+  @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString, "--quick-connect-fixture",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    func type(_ text: String, into field: XCUIElement, expecting value: String) async throws {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(5))
+      var previousFrame = CGRect.null
+      while clock.now < deadline {
+        let frame = field.frame
+        if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
+          field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+          app.typeText(text)
+          XCTAssertEqual(field.value as? String, value)
+          return
+        }
+        previousFrame = frame
+        try await Task.sleep(for: .milliseconds(180))
+      }
+      XCTFail("The text field did not settle inside the app window")
+    }
+    let address = app.textFields["Server address"]
+    let start = app.buttons["Sign in with Quick Connect"]
+    XCTAssertTrue(address.waitForExistence(timeout: 8))
+    XCTAssertFalse(start.isEnabled)
+    let url = "https://music.invalid/jellyfin"
+    try await type(url, into: address, expecting: url)
+    start.tap()
+    let code = app.staticTexts["quick-connect-code"]
+    XCTAssertTrue(code.waitForExistence(timeout: 5))
+    XCTAssertEqual(code.value as? String, "1 2 0 0 0 1")
+    app.navigationBars.buttons.firstMatch.tap()
+    XCTAssertTrue(start.waitForExistence(timeout: 5))
+    XCTAssertTrue(start.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+    XCTAssertEqual(address.value as? String, url)
+    start.tap()
+    XCTAssertTrue(code.waitForExistence(timeout: 5))
+    XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(accounts.waitForExistence(timeout: 22))
+    XCTAssertTrue(accounts.isHittable)
+    accounts.tap()
+    app.buttons["Quick Connect"].tap()
+    let field = app.textFields["quick-connect-input"]
+    let approve = app.buttons["Approve sign-in"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      app.descendants(matching: .any).matching(
+        NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
+      ).firstMatch.exists)
+    XCTAssertFalse(approve.isEnabled)
+    try await type("999999", into: field, expecting: "999999")
+    XCTAssertTrue(approve.isEnabled)
+    approve.tap()
+    let error = app.descendants(matching: .any).matching(identifier: "quick-connect-approval-error")
+      .firstMatch
+    XCTAssertTrue(error.waitForExistence(timeout: 5))
+    XCTAssertTrue(error.label.contains("invalid or has expired"))
+    let clear = String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6)
+    try await type(clear + "246810", into: field, expecting: "246810")
+    XCTAssertTrue(approve.isEnabled)
+    let success = app.descendants(matching: .any).matching(identifier: "quick-connect-approved")
+      .firstMatch
+    XCTAssertFalse(success.exists)
+    approve.tap()
+    XCTAssertTrue(success.waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(accounts.waitForExistence(timeout: 5))
+  }
+  @MainActor func testSavedAccountDetailsOpenOffline() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString, "--saved-account-fixture",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let details = app.buttons["Connection details for Offline listener"]
+    XCTAssertTrue(details.waitForExistence(timeout: 8))
+    details.tap()
+    let address = app.staticTexts["connection-server-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "http://offline.invalid/music")
+    XCTAssertEqual(app.staticTexts["connection-username"].label, "Offline listener")
+    XCTAssertTrue(
+      app.staticTexts["This saved address uses HTTP. Use your server’s HTTPS address to sign in."]
+        .exists)
+    XCTAssertTrue(app.buttons["Copy server address"].isHittable)
+    XCTAssertFalse(app.buttons["transport-start"].exists)
+    app.buttons["Done"].tap()
+    XCTAssertTrue(details.waitForExistence(timeout: 4))
+    app.buttons["Offline listener"].tap()
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    app.buttons["Done"].tap()
+    let field = app.textFields["Server address"]
+    XCTAssertTrue(field.waitForExistence(timeout: 4))
+    XCTAssertEqual(field.value as? String, "http://offline.invalid/music")
+    XCTAssertEqual(app.textFields["Username"].value as? String, "Offline listener")
+    XCTAssertFalse(app.buttons["Connect"].isEnabled)
+  }
   @MainActor func testActiveConnectionDetailsAtLargeText() throws {
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
     app.launchArguments = ["--fixture", "--muted", "--large-text"]

@@ -298,7 +298,10 @@ final class TransportControlEntryTests: XCTestCase {
     let accepted = TransportControlLaunch(arguments: arguments)
     let slow = TransportControlLaunch(arguments: arguments + ["--slow-fixture"])
     #if DEBUG
-      for variant in [slow, TransportControlLaunch(arguments: arguments + ["--long-album"])] {
+      for variant in [
+        slow, TransportControlLaunch(arguments: arguments + ["--long-album"]),
+        TransportControlLaunch(arguments: arguments + ["--quick-connect-fixture"]),
+      ] {
         if case .interactive(let value) = variant {
           XCTAssertEqual(value, UUID(uuidString: id))
         } else {
@@ -312,6 +315,12 @@ final class TransportControlEntryTests: XCTestCase {
         XCTFail("The exact invented UI launch must be admitted")
       }
       XCTAssertNil(accepted.runID, "Interactive UI must not prepare inputs, reports or tails")
+      if case .rejected = TransportControlLaunch(
+        arguments: arguments + ["--quick-connect-fixture", "--saved-account-fixture"])
+      {
+      } else {
+        XCTFail("Sign-in and saved-account fixtures need different starting states")
+      }
     #else
       if case .rejected = accepted {} else { XCTFail("Release cannot admit interactive fixtures") }
     #endif

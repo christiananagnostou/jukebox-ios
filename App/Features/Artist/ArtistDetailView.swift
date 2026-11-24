@@ -63,7 +63,7 @@ struct ArtistDetailView: View {
   let canvas: CGRect
   let open: (MusicItem, MusicBrowser) -> Void
   let browse: (MusicCategory, MusicBrowser) -> Void
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
   let isCurrent: () -> Bool
   let search: (String, MusicCategory, MusicBrowser) -> Void
   @State private var model: MusicBrowser?
@@ -82,12 +82,10 @@ struct ArtistDetailView: View {
         .id(owner)
         .musicTextMotion(allowed: !showInformation)
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            MusicHeaderActions(
-              store: store, browser: model, context: owner,
-              isCurrent: { isCurrent() && model.scope == owner && model.metadataIsCurrent },
-              connection: $connection)
-          }.sharedBackgroundVisibility(.hidden)
+          MusicHeaderActions(
+            store: store, browser: model, context: owner,
+            isCurrent: { isCurrent() && model.scope == owner && model.metadataIsCurrent },
+            accountSheet: $accountSheet)
         }
       } else {
         ProgressView("Loading artist…")
@@ -244,7 +242,7 @@ struct ArtistCatalogView: View {
   let artist: MusicItem
   let category: MusicCategory
   let canvas: CGRect
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
   let open: (MusicItem, MusicBrowser) -> Void
   let search: (String, MusicCategory, MusicBrowser) -> Void
   @State private var model: MusicBrowser?
@@ -260,12 +258,10 @@ struct ArtistCatalogView: View {
           search: { if model.scope == owner && model.metadataIsCurrent { search($0, $1, model) } }
         )
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            MusicHeaderActions(
-              store: store, browser: model, context: owner,
-              isCurrent: { model.scope == owner && model.metadataIsCurrent },
-              connection: $connection)
-          }.sharedBackgroundVisibility(.hidden)
+          MusicHeaderActions(
+            store: store, browser: model, context: owner,
+            isCurrent: { model.scope == owner && model.metadataIsCurrent },
+            accountSheet: $accountSheet)
         }
       } else {
         ProgressView("Loading music…")

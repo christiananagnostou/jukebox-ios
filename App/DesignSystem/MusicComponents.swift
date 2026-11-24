@@ -417,99 +417,90 @@ struct MusicMediaPicker: View {
   }
 }
 
-struct MusicLibraryPicker: View {
+private struct MusicLibraryPicker: View {
   let browser: MusicBrowser
   let identity: AnyHashable
   let isCurrent: () -> Bool
   var body: some View {
-    if browser.metadataIsCurrent, !browser.libraries.isEmpty {
-      let owner = browser.scope
-      let selected = browser.libraries.first { $0.id == browser.libraryID }
-      MusicPopover(
-        "Music libraries", identity: identity, identifier: "music-library-picker",
-        isCurrent: { isCurrent() && browser.scope == owner && browser.metadataIsCurrent }
-      ) { current, close in
-        ForEach(browser.libraries) { library in
-          Button {
-            guard current(), browser.scope == owner, browser.metadataIsCurrent else { return }
-            close()
-            browser.selectLibrary(library.id)
-          } label: {
-            MusicMenuRow(
-              title: library.title, symbol: "folder", selected: library.id == browser.libraryID)
-          }.accessibilityIdentifier("music-library-" + library.id)
-        }
-      } label: {
-        MusicUtilityLabel(title: "Music library", symbol: "folder", secondary: true)
-      }.accessibilityLabel("Music library").accessibilityValue(selected?.title ?? "Library")
-    }
+    let owner = browser.scope
+    let selected = browser.libraries.first { $0.id == browser.libraryID }
+    MusicPopover(
+      "Music libraries", identity: identity, identifier: "music-library-picker",
+      isCurrent: { isCurrent() && browser.scope == owner && browser.metadataIsCurrent }
+    ) { current, close in
+      ForEach(browser.libraries) { library in
+        Button {
+          guard current(), browser.scope == owner, browser.metadataIsCurrent else { return }
+          close()
+          browser.selectLibrary(library.id)
+        } label: {
+          MusicMenuRow(
+            title: library.title, symbol: "folder", selected: library.id == browser.libraryID)
+        }.accessibilityIdentifier("music-library-" + library.id)
+      }
+    } label: {
+      MusicUtilityLabel(title: "Music library", symbol: "folder", secondary: true)
+    }.accessibilityLabel("Music library").accessibilityValue(selected?.title ?? "Library")
   }
 }
 
 private struct MusicHeaderIdentity: Hashable {
   let account: String?
   let root: UUID?
-  let source: UUID
+  let source: UUID?
   let context: AnyHashable
 }
 
-struct MusicHeaderActions: View {
+struct MusicHeaderActions: ToolbarContent {
   let store: PlayerStore
-  let browser: MusicBrowser
+  let browser: MusicBrowser?
   let context: AnyHashable
   let isCurrent: () -> Bool
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
+  var backgroundVisibility: Visibility = .hidden
   private var identity: MusicHeaderIdentity {
     MusicHeaderIdentity(
-      account: store.active?.id, root: store.browser?.scope, source: browser.scope, context: context
+      account: store.active?.id, root: store.browser?.scope, source: browser?.scope,
+      context: context
     )
   }
-  var body: some View {
+  var body: some ToolbarContent {
     let owner = identity
     let current = { isCurrent() && identity == owner }
-    HStack(spacing: 0) {
-      MusicLibraryPicker(
-        browser: browser, identity: owner, isCurrent: current)
-      MusicPopover(
-        "Account and connection", identity: owner, identifier: "Accounts", isCurrent: current
-      ) { admitted, close in
-        Button {
-          guard admitted() else { return }
-          close()
-          connection = store.active
-        } label: {
-          MusicMenuRow(title: "Connection details", symbol: "network")
+    if let browser, browser.metadataIsCurrent, !browser.libraries.isEmpty {
+      ToolbarItem(placement: .topBarTrailing) {
+        MusicLibraryPicker(browser: browser, identity: owner, isCurrent: current)
+      }.sharedBackgroundVisibility(backgroundVisibility)
+    }
+    ToolbarItem(placement: .topBarTrailing) {
+      Menu {
+        Button("Connection details", systemImage: "network") {
+          if current(), let account = store.active { accountSheet = .details(account) }
         }
-        ForEach(store.connections) { account in
-          Button {
-            guard admitted() else { return }
-            close()
-            Task { if current() { await store.activate(account) } }
-          } label: {
-            MusicMenuRow(
-              title: account.username, symbol: "person.crop.circle",
-              selected: account.id == owner.account)
+        if store.canApproveQuickConnect {
+          Button("Quick Connect", systemImage: "number.square") {
+            if current(), let account = store.active { accountSheet = .quickConnect(account) }
           }
         }
-        Button {
-          guard admitted() else { return }
-          close()
-          store.addConnection()
-        } label: {
-          MusicMenuRow(title: "Add account", symbol: "person.badge.plus")
+        Section {
+          ForEach(store.connections) { account in
+            Button(
+              account.username, systemImage: account.id == owner.account ? "checkmark" : "person"
+            ) {
+              Task { if current() { await store.activate(account) } }
+            }
+          }
+          Button("Add account", systemImage: "person.badge.plus") {
+            if current() { store.addConnection() }
+          }
         }
-        Button(role: .destructive) {
-          guard admitted() else { return }
-          close()
+        Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
           Task { if current() { await store.logout() } }
-        } label: {
-          MusicMenuRow(
-            title: "Sign out", symbol: "rectangle.portrait.and.arrow.right", destructive: true)
         }
       } label: {
-        MusicUtilityLabel(title: "Accounts", symbol: "person.crop.circle")
-      }.accessibilityLabel("Accounts")
-    }
+        Label("Accounts", systemImage: "person.crop.circle").labelStyle(.iconOnly)
+      }.accessibilityLabel("Accounts").accessibilityIdentifier("Accounts")
+    }.sharedBackgroundVisibility(backgroundVisibility)
   }
 }
 

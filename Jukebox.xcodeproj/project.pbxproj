@@ -5,6 +5,12 @@
 	};
 	objectVersion = 56;
 	objects = {
+19937FEC85BE9BD1E8A4DAD3 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/JukeboxCore/Connection/JellyfinAuthentication.swift"; sourceTree = "<group>"; };
+EC8E31007F30464DDD4DDF83 = { isa = PBXBuildFile; fileRef = 19937FEC85BE9BD1E8A4DAD3; };
+F629600C57FF6E7E2A4CC027 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Acceptance/QuickConnectFixtureHTTP.swift"; sourceTree = "<group>"; };
+F2F1D23DE3F8F78CFEB83FC4 = { isa = PBXBuildFile; fileRef = F629600C57FF6E7E2A4CC027; };
+DCFF40DC71EC95A7AFC73A79 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Features/Connection/QuickConnectViews.swift"; sourceTree = "<group>"; };
+8624C7093232AFA41438B7EB = { isa = PBXBuildFile; fileRef = DCFF40DC71EC95A7AFC73A79; };
 ADFC4897EFD27E8ABE6D278A = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/JukeboxCore/Catalog/PlaylistEditing.swift"; sourceTree = "<group>"; };
 7715EA6E19177B6ECB2606FC = { isa = PBXBuildFile; fileRef = ADFC4897EFD27E8ABE6D278A; };
 8DAA36BC10F6259B8EFD54EB = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/JukeboxCore/Catalog/FixturePlaylists.swift"; sourceTree = "<group>"; };
@@ -220,6 +226,9 @@ CD563B61596CB519C19361B7 = { isa = PBXFileReference; lastKnownFileType = sourcec
 		AD936FCBED631FA67E05C3EA = {
 			isa = PBXGroup;
 			children = (
+				19937FEC85BE9BD1E8A4DAD3,
+				F629600C57FF6E7E2A4CC027,
+				DCFF40DC71EC95A7AFC73A79,
 				ADFC4897EFD27E8ABE6D278A,
 				8DAA36BC10F6259B8EFD54EB,
 				D7534BFE59082F16ABA537A6,
@@ -397,6 +406,9 @@ CD563B61596CB519C19361B7 = { isa = PBXFileReference; lastKnownFileType = sourcec
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EC8E31007F30464DDD4DDF83,
+				F2F1D23DE3F8F78CFEB83FC4,
+				8624C7093232AFA41438B7EB,
 				7715EA6E19177B6ECB2606FC,
 				280BB2B43792204C0ADD571A,
 				7ECF5BABF5317A16D94C3F39,

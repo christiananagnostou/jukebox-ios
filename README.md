@@ -8,6 +8,12 @@ Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in t
 2. Open `Jukebox.xcodeproj` and select the **Jukebox** scheme. For a physical device, select your development team and a bundle identifier you can sign.
 3. Run the app. Enter your server’s HTTPS address, including when using Tailscale, and select a Music library, or choose **Try invented music** to explore the demo.
 
+To see your saved server address and username, open **Accounts → Connection details**. On the Connect screen, tap the information button beside a saved account. Viewing these details works offline.
+
+For passwordless sign-in, enter your HTTPS server address and choose **Sign in with Quick Connect**. In another Jellyfin client already signed in to the same server, open Quick Connect and approve the displayed code. To authorize another device from Jukebox, open **Accounts → Quick Connect**, enter that device’s code, and tap **Approve sign-in**. The device signs in to the account shown on the approval screen.
+
+Keep personal server addresses, signing settings and library data local. Use invented accounts and media in contributions and tests.
+
 ## Playlists
 
 Jukebox uses your signed-in account’s playlist permissions. It can create private playlists, edit songs and their order, change covers, and manage sharing on playlists you own. A shared editor can make the changes Jellyfin permits. A playlist imported from an M3U file may have no Jellyfin owner. In Jellyfin Web, open the playlist’s menu, choose **Add to playlist**, then **New**, to create a playlist owned by your account. The copy has a new ID.

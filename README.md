@@ -20,7 +20,9 @@ Keep personal server addresses, signing settings and library data local. Use inv
 
 Jukebox uses your signed-in account’s playlist permissions. It can create private playlists, edit songs and their order, change covers, and manage sharing on playlists you own. A shared editor can make the changes Jellyfin permits.
 
-To copy a playlist, open **Playlist actions (…) → Make an editable copy**, choose a name, and tap **Create copy**. This also works for read-only imports when all songs belong to the selected Music library. Jukebox creates a separate private playlist, checks its editing access, and compares every song position and repeat with the original. If Jellyfin can’t confirm the result, check the new playlist before making another copy.
+To copy a playlist, open **Playlist actions (…) → Make an editable copy**, choose a name, and tap **Create copy**. Jukebox can copy read-only playlists when Jellyfin lists their songs in the selected Music library. It creates a separate private playlist, checks its editing access, and compares every song position and repeat with the original. If Jellyfin can’t confirm the result, check the new playlist before making another copy.
+
+On Jellyfin 12.4.0, check that an imported M3U shows the expected tracks in Jellyfin before copying it. In compatibility testing, Jellyfin returned zero tracks for an M3U containing three entries. The server also returned HTTP 500 when adding an individual playlist collaborator. [12.4 test results](https://github.com/christiananagnostou/jukebox-ios/pull/3)
 
 ## Checks
 

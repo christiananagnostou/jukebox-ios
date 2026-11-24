@@ -51,7 +51,7 @@ struct BrowserShell: View {
   @State private var dashboardPath: [BrowseRoute] = []
   @State private var musicPath: [BrowseRoute] = []
   @State private var searchPath: [BrowseRoute] = []
-  @State private var connection: Connection?
+  @State private var accountSheet: AccountSheet?
   @State private var pendingRoute: MusicItem?
   @State private var relatedError: String?
   @State private var searchModel: MusicBrowser?
@@ -119,7 +119,7 @@ struct BrowserShell: View {
       }
     }
     .playlistActions(store: store)
-    .musicTextMotion(allowed: connection == nil && !store.showPlayer && !store.showQueue)
+    .musicTextMotion(allowed: accountSheet == nil && !store.showPlayer && !store.showQueue)
     .background { PlaybackPresenceObserver(store: store, present: $hasPlayback) }
     .task { await browser.start() }
     .onReceive(NotificationCenter.default.publisher(for: ProfilingRun.browseNotification)) { _ in
@@ -136,7 +136,7 @@ struct BrowserShell: View {
       dashboardPath = []
       musicPath = []
       searchPath = []
-      connection = nil
+      accountSheet = nil
       if let pendingRoute {
         musicPath = [.item(pendingRoute)]
         self.pendingRoute = nil
@@ -151,8 +151,13 @@ struct BrowserShell: View {
         HomeLayoutEditor(browser: browser, scope: owner)
       }
     }
-    .sheet(item: $connection) { input in
-      if store.active?.id == input.id { ConnectionDetails(store: store, connection: input) }
+    .sheet(item: $accountSheet) { sheet in
+      if store.active?.id == sheet.account.id {
+        switch sheet {
+        case .details(let account): ConnectionDetails(store: store, connection: account)
+        case .quickConnect(let account): QuickConnectApproval(store: store, account: account)
+        }
+      }
     }
     .sheet(isPresented: $store.showPlayer) {
       PlayerScreen(
@@ -307,7 +312,7 @@ struct BrowserShell: View {
           MusicHeaderActions(
             store: store, browser: source, context: context,
             isCurrent: { menuIdentity == context && representedBrowser === source },
-            connection: $connection)
+            accountSheet: $accountSheet)
         }
       }
     }.sharedBackgroundVisibility(tab == .dashboard ? .automatic : .hidden)
@@ -333,7 +338,7 @@ struct BrowserShell: View {
         if route.isCurrent {
           ArtistCatalogView(
             store: store, parent: route.browser, artist: route.item,
-            category: category, canvas: canvas, connection: $connection, open: openScopedItem,
+            category: category, canvas: canvas, accountSheet: $accountSheet, open: openScopedItem,
             search: { value, category, child in
               find(value, category, source: child, owner: child.scope)
             }
@@ -373,7 +378,7 @@ struct BrowserShell: View {
               CatalogResultRoute(
                 item: item, browser: child, scope: child.scope,
                 library: library), category))
-        }, connection: $connection,
+        }, accountSheet: $accountSheet,
         isCurrent: isCurrent,
         search: { value, category, child in
           find(value, category, source: child, owner: child.scope)

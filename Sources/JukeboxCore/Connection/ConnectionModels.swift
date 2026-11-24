@@ -182,7 +182,10 @@ struct ServerAddress: Codable, Hashable, Sendable {
       throw ClientError.invalidResponse
     }
     c.path += "/" + path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    if !query.isEmpty { c.queryItems = query }
+    if !query.isEmpty {
+      c.queryItems = query
+      c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+    }
     guard let result = c.url else { throw ClientError.invalidResponse }
     return result
   }

@@ -35,10 +35,19 @@ enum TransportControlLaunch {
       case "--transport-ui":
         let required: Set<String> = ["--fixture", "--muted", flags[0]]
         let supplied = Set(arguments)
+        if supplied.contains("--quick-connect-fixture"),
+          supplied != required.union(["--quick-connect-fixture"])
+        {
+          self = .rejected
+          return
+        }
         self =
           supplied.count == arguments.count && supplied.isSuperset(of: required)
             && supplied.isSubset(
-              of: required.union(["--slow-fixture", "--long-album", "--saved-account-fixture"]))
+              of: required.union([
+                "--slow-fixture", "--long-album", "--saved-account-fixture",
+                "--quick-connect-fixture",
+              ]))
           ? .interactive(id) : .rejected
       default: self = .rejected
       }

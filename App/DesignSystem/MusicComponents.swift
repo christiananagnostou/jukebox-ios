@@ -458,7 +458,7 @@ struct MusicHeaderActions: View {
   let browser: MusicBrowser
   let context: AnyHashable
   let isCurrent: () -> Bool
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
   private var identity: MusicHeaderIdentity {
     MusicHeaderIdentity(
       account: store.active?.id, root: store.browser?.scope, source: browser.scope, context: context
@@ -472,7 +472,12 @@ struct MusicHeaderActions: View {
         browser: browser, identity: owner, isCurrent: current)
       Menu {
         Button("Connection details", systemImage: "network") {
-          if current() { connection = store.active }
+          if current(), let account = store.active { accountSheet = .details(account) }
+        }
+        if store.canApproveQuickConnect {
+          Button("Quick Connect", systemImage: "number.square") {
+            if current(), let account = store.active { accountSheet = .quickConnect(account) }
+          }
         }
         Section {
           ForEach(store.connections) { account in

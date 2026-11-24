@@ -3658,6 +3658,65 @@ final class JukeboxUITests: XCTestCase {
       XCTAssertTrue(tab.isSelected)
     }
   }
+  @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString, "--quick-connect-fixture",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let address = app.textFields["Server address"]
+    let start = app.buttons["Sign in with Quick Connect"]
+    XCTAssertTrue(address.waitForExistence(timeout: 8))
+    XCTAssertFalse(start.isEnabled)
+    address.tap()
+    address.typeText("https://music.invalid/jellyfin")
+    start.tap()
+    let code = app.staticTexts["quick-connect-code"]
+    XCTAssertTrue(code.waitForExistence(timeout: 5))
+    XCTAssertEqual(code.value as? String, "1 2 0 0 0 1")
+    app.navigationBars.buttons.firstMatch.tap()
+    XCTAssertTrue(start.waitForExistence(timeout: 5))
+    let ready = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "enabled == YES"), object: start)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+    XCTAssertEqual(address.value as? String, "https://music.invalid/jellyfin")
+    start.tap()
+    XCTAssertTrue(code.waitForExistence(timeout: 5))
+    XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
+    let accounts = app.buttons["Accounts"]
+    XCTAssertTrue(accounts.waitForExistence(timeout: 22))
+    accounts.tap()
+    app.buttons["Quick Connect"].tap()
+    let field = app.textFields["quick-connect-input"]
+    let approve = app.buttons["Approve sign-in"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      app.descendants(matching: .any).matching(
+        NSPredicate(format: "label CONTAINS %@", "Demo listener")
+      ).firstMatch.exists)
+    XCTAssertFalse(approve.isEnabled)
+    field.tap()
+    field.typeText("999999")
+    XCTAssertTrue(approve.isEnabled)
+    approve.tap()
+    let error = app.descendants(matching: .any).matching(identifier: "quick-connect-approval-error")
+      .firstMatch
+    XCTAssertTrue(error.waitForExistence(timeout: 5))
+    XCTAssertTrue(error.label.contains("invalid or has expired"))
+    field.tap()
+    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6))
+    field.typeText("246810")
+    XCTAssertTrue(approve.isEnabled)
+    let success = app.descendants(matching: .any).matching(identifier: "quick-connect-approved")
+      .firstMatch
+    XCTAssertFalse(success.exists)
+    approve.tap()
+    XCTAssertTrue(success.waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(accounts.waitForExistence(timeout: 5))
+  }
   @MainActor func testSavedAccountDetailsOpenOffline() throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")

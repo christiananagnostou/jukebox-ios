@@ -63,7 +63,7 @@ struct ArtistDetailView: View {
   let canvas: CGRect
   let open: (MusicItem, MusicBrowser) -> Void
   let browse: (MusicCategory, MusicBrowser) -> Void
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
   let isCurrent: () -> Bool
   let search: (String, MusicCategory, MusicBrowser) -> Void
   @State private var model: MusicBrowser?
@@ -86,7 +86,7 @@ struct ArtistDetailView: View {
             MusicHeaderActions(
               store: store, browser: model, context: owner,
               isCurrent: { isCurrent() && model.scope == owner && model.metadataIsCurrent },
-              connection: $connection)
+              accountSheet: $accountSheet)
           }.sharedBackgroundVisibility(.hidden)
         }
       } else {
@@ -244,7 +244,7 @@ struct ArtistCatalogView: View {
   let artist: MusicItem
   let category: MusicCategory
   let canvas: CGRect
-  @Binding var connection: Connection?
+  @Binding var accountSheet: AccountSheet?
   let open: (MusicItem, MusicBrowser) -> Void
   let search: (String, MusicCategory, MusicBrowser) -> Void
   @State private var model: MusicBrowser?
@@ -264,7 +264,7 @@ struct ArtistCatalogView: View {
             MusicHeaderActions(
               store: store, browser: model, context: owner,
               isCurrent: { model.scope == owner && model.metadataIsCurrent },
-              connection: $connection)
+              accountSheet: $accountSheet)
           }.sharedBackgroundVisibility(.hidden)
         }
       } else {

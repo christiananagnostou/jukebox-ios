@@ -10,6 +10,8 @@ Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in t
 
 To see your saved server address and username, open **Accounts → Connection details**. On the Connect screen, tap the information button beside a saved account. Viewing these details works offline.
 
+For passwordless sign-in, enter your HTTPS server address and choose **Sign in with Quick Connect**. In another Jellyfin client already signed in to the same server, open Quick Connect and approve the displayed code. To authorize another device from Jukebox, open **Accounts → Quick Connect**, enter that device’s code, and tap **Approve sign-in**. The device signs in to the account shown on the approval screen.
+
 Keep personal server addresses, signing settings and library data local. Use invented accounts and media in contributions and tests.
 
 ## Playlists

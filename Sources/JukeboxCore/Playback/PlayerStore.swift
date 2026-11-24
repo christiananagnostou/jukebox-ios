@@ -138,6 +138,7 @@ import Observation
   private let driver: any PlaybackDriving
   private let deviceID: String
   private let allowedFamilies: Set<String>
+  private let authenticationTransport: any HTTPTransport
   private let preparationTimeout: Duration
   private let preparationSleep: @Sendable (Duration) async throws -> Void
   private let factory: @Sendable (Connection, String) throws -> any MusicCatalogServing
@@ -201,6 +202,7 @@ import Observation
         try await Task.sleep(for: .seconds(deadline.timeIntervalSinceNow))
       }
     },
+    authenticationTransport: any HTTPTransport = LiveHTTP(),
     prepareCover: @escaping @Sendable (Data) async -> Data? = { $0 },
     artworkTone: @escaping @Sendable (Data) async -> ArtworkTone? = { _ in nil },
     factory: @escaping @Sendable (Connection, String) throws -> any MusicCatalogServing = {
@@ -217,6 +219,7 @@ import Observation
     self.driver = driver
     self.deviceID = deviceID
     self.allowedFamilies = allowedFamilies
+    self.authenticationTransport = authenticationTransport
     self.preparationTimeout = preparationTimeout
     self.preparationSleep = preparationSleep
     self.factory = factory
@@ -335,32 +338,77 @@ import Observation
   func signIn(address: String, username: String, password: String)
     async
   {
-    guard !busy, pendingSignOut == nil else { return }
+    do {
+      _ = try await signIn {
+        let server = try ServerAddress(address)
+        return try await authentication(for: server).password(
+          username: username, password: password)
+      }
+    } catch is CancellationError {
+    } catch {
+      self.error = message(
+        error is ConnectionStepError
+          ? error : ConnectionStepError(step: .authentication, error: error))
+    }
+  }
+  private func authentication(for server: ServerAddress) -> JellyfinAuthentication {
+    JellyfinAuthentication(
+      server: server, deviceID: deviceID, transport: authenticationTransport,
+      allowedFamilies: allowedFamilies)
+  }
+  func signInWithQuickConnect(
+    server: ServerAddress, showCode: @MainActor @Sendable (QuickConnectCode) -> Void
+  ) async throws {
+    guard active == nil else { throw QuickConnectError.accountChanged }
+    let account = try await signIn {
+      try await authentication(for: server).quickConnect(showCode: showCode)
+    }
+    guard active?.id == account.id else { throw ClientError.unavailable }
+  }
+  var canApproveQuickConnect: Bool { active != nil && service is any QuickConnectAuthorizing }
+  func approveQuickConnect(_ code: QuickConnectCode, for account: Connection) async throws {
+    guard !busy, active?.id == account.id, let authorizer = service as? any QuickConnectAuthorizing
+    else { throw QuickConnectError.accountChanged }
+    let generation = epoch
+    try Task.checkCancellation()
+    try await authorizer.authorizeQuickConnect(code) { [weak self] in
+      self?.epoch == generation && self?.active?.id == account.id
+    }
+    try Task.checkCancellation()
+    guard generation == epoch, active?.id == account.id else {
+      throw QuickConnectError.accountChanged
+    }
+  }
+  private func signIn(_ authenticate: () async throws -> (Connection, String)) async throws
+    -> Connection
+  {
+    guard !busy, pendingSignOut == nil else { throw CancellationError() }
     busy = true
     error = nil
     let generation = epoch
     var step = ConnectionStepError.Step.authentication
     do {
-      let server = try ServerAddress(address)
-      let (connection, token) = try await JellyfinClient.login(
-        server: server, username: username, password: password, deviceID: deviceID,
-        allowedFamilies: allowedFamilies)
+      let (connection, token) = try await authenticate()
       try Task.checkCancellation()
-      guard generation == epoch else { return }
+      guard generation == epoch else { throw CancellationError() }
       step = .secureStorage
       try await vault.write(token, account: connection.id)
+      guard generation == epoch else { throw CancellationError() }
       step = .savedConnection
-      connections.removeAll { $0.id == connection.id }
-      connections.insert(connection, at: 0)
-      try await storage.saveConnections(connections)
+      let saved = [connection] + connections.filter { $0.id != connection.id }
+      try await storage.saveConnections(saved)
+      guard generation == epoch else { throw CancellationError() }
+      connections = saved
+      try Task.checkCancellation()
       busy = false
       await activate(connection)
+      return connection
     } catch {
-      if generation == epoch {
-        self.error = message(
-          error is ConnectionStepError ? error : ConnectionStepError(step: step, error: error))
-        busy = false
-      }
+      guard generation == epoch else { throw CancellationError() }
+      busy = false
+      try Task.checkCancellation()
+      if step == .authentication { throw error }
+      throw ConnectionStepError(step: step, error: error)
     }
   }
   func activate(_ connection: Connection) async {

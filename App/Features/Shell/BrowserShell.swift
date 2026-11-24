@@ -332,7 +332,7 @@ struct BrowserShell: View {
             guard tab == selectedTab, activePath.wrappedValue.last == route,
               browser.scope == owner, browser.playlistIndex.permitsOpening(copy.id)
             else { return }
-            append(.playlist(copy, owner))
+            append(.playlist(copy, scope: owner))
           }
           .id(route)
         }

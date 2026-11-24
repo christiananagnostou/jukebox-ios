@@ -3699,11 +3699,7 @@ final class JukeboxUITests: XCTestCase {
       if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
           .withOffset(CGVector(dx: 0, dy: verticalOffset)).tap()
-        if field.elementType == .secureTextField {
-          field.typeText(text)
-        } else {
-          app.typeText(text)
-        }
+        app.typeText(text)
         if let value { XCTAssertEqual(field.value as? String, value) }
         return
       }
@@ -3818,8 +3814,27 @@ final class JukeboxUITests: XCTestCase {
     }
     try await typeAccountText(
       "Listener", into: username, in: app, expecting: "Listener", verticalOffset: 22)
+    let keyboardImage = try XCTUnwrap(app.screenshot().image.cgImage)
+    let fieldEdgeColor = try screenColor(
+      image, screen: screen, xOffset: fieldFrame.midX - screen.minX, y: fieldFrame.minY + 4)
+    let keyboardEdgeColor = try screenColor(
+      keyboardImage, screen: screen, xOffset: password.frame.midX - screen.minX,
+      y: password.frame.minY + 4)
     try await typeAccountText("fixture", into: password, in: app, verticalOffset: -22)
-    XCTAssertEqual(username.value as? String, "Listener")
+    if username.value as? String != "Listener" {
+      let valueAfterEdge = username.value as? String
+      password.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 4 / fieldFrame.height)).tap()
+      app.typeText("a")
+      let valueAfterSecondEdge = username.value as? String
+      password.tap()
+      app.typeText("b")
+      let edgeChangedUsername = valueAfterEdge != valueAfterSecondEdge
+      let centerChangedUsername = valueAfterSecondEdge != (username.value as? String)
+      XCTFail(
+        "The first password tap sent text to Username. A second edge tap changed Username: \(edgeChangedUsername). A center tap changed Username: \(centerChangedUsername). Field edge RGB before/after the keyboard: \(fieldEdgeColor)/\(keyboardEdgeColor)."
+      )
+      return
+    }
     submit.tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 10))

@@ -3661,7 +3661,7 @@ final class JukeboxUITests: XCTestCase {
       XCTAssertTrue(tab.isSelected)
     }
   }
-  @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() throws {
+  @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() async throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
     app.launchArguments = [
@@ -3669,32 +3669,37 @@ final class JukeboxUITests: XCTestCase {
     ]
     app.launch()
     defer { app.terminate() }
-    func focusForTyping(_ field: XCUIElement) -> Bool {
-      let keyboard = app.keyboards.firstMatch
-      for _ in 0..<2 {
-        guard field.wait(for: \.isHittable, toEqual: true, timeout: 4) else { return false }
-        field.tap()
-        if keyboard.waitForExistence(timeout: 3) || field.hasFocus { return true }
+    func type(_ text: String, into field: XCUIElement, expecting value: String) async throws {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(5))
+      var previousFrame = CGRect.null
+      while clock.now < deadline {
+        let frame = field.frame
+        if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
+          field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+          app.typeText(text)
+          XCTAssertEqual(field.value as? String, value)
+          return
+        }
+        previousFrame = frame
+        try await Task.sleep(for: .milliseconds(180))
       }
-      return false
+      XCTFail("The text field did not settle inside the app window")
     }
     let address = app.textFields["Server address"]
     let start = app.buttons["Sign in with Quick Connect"]
     XCTAssertTrue(address.waitForExistence(timeout: 8))
     XCTAssertFalse(start.isEnabled)
-    XCTAssertTrue(focusForTyping(address), "The server address field did not receive input focus")
-    address.typeText("https://music.invalid/jellyfin")
-    XCTAssertEqual(address.value as? String, "https://music.invalid/jellyfin")
+    let url = "https://music.invalid/jellyfin"
+    try await type(url, into: address, expecting: url)
     start.tap()
     let code = app.staticTexts["quick-connect-code"]
     XCTAssertTrue(code.waitForExistence(timeout: 5))
     XCTAssertEqual(code.value as? String, "1 2 0 0 0 1")
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(start.waitForExistence(timeout: 5))
-    let ready = XCTNSPredicateExpectation(
-      predicate: NSPredicate(format: "enabled == YES"), object: start)
-    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
-    XCTAssertEqual(address.value as? String, "https://music.invalid/jellyfin")
+    XCTAssertTrue(start.wait(for: \.isEnabled, toEqual: true, timeout: 5))
+    XCTAssertEqual(address.value as? String, url)
     start.tap()
     XCTAssertTrue(code.waitForExistence(timeout: 5))
     XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
@@ -3711,17 +3716,15 @@ final class JukeboxUITests: XCTestCase {
         NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
       ).firstMatch.exists)
     XCTAssertFalse(approve.isEnabled)
-    XCTAssertTrue(focusForTyping(field), "The approval code field did not receive input focus")
-    field.typeText("999999")
+    try await type("999999", into: field, expecting: "999999")
     XCTAssertTrue(approve.isEnabled)
     approve.tap()
     let error = app.descendants(matching: .any).matching(identifier: "quick-connect-approval-error")
       .firstMatch
     XCTAssertTrue(error.waitForExistence(timeout: 5))
     XCTAssertTrue(error.label.contains("invalid or has expired"))
-    XCTAssertTrue(focusForTyping(field), "The approval code field did not receive input focus")
-    field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6))
-    field.typeText("246810")
+    let clear = String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6)
+    try await type(clear + "246810", into: field, expecting: "246810")
     XCTAssertTrue(approve.isEnabled)
     let success = app.descendants(matching: .any).matching(identifier: "quick-connect-approved")
       .firstMatch

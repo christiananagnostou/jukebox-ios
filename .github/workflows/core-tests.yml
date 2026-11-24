@@ -1,0 +1,23 @@
+name: Core tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run the Swift Core suite
+        run: >-
+          swift test --build-system native --jobs 1
+          -Xswiftc -j1 -Xswiftc -whole-module-optimization
+          -Xswiftc -num-threads -Xswiftc 1

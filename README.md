@@ -1,6 +1,6 @@
 # Jukebox for iOS
 
-Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in the 12.1 and 12.2 release families. Browse albums, artists, songs and playlists, search your music library, and control playback from the app or the Lock Screen.
+Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in the 12.1, 12.2 and 12.4 release families. Browse albums, artists, songs and playlists, search your music library, and control playback from the app or the Lock Screen.
 
 ## Build and run
 
@@ -24,4 +24,14 @@ To copy a playlist, open **Playlist actions (…) → Make an editable copy**, c
 
 ## Checks
 
-Run `swift test --jobs 1` for the Core tests and `python3 -B -m tools.add_source --check` for Xcode source membership. The JukeboxUITests target exercises the native interface with invented music.
+GitHub Actions runs the Core suite on macOS for pull requests and pushes to `main`. Run `swift test --jobs 1` locally and `python3 -B -m tools.add_source --check` to check Xcode source membership. The JukeboxUITests target exercises the native interface with invented music.
+
+To repeat the Jellyfin 12.4 compatibility check on a Mac, unpack the stock server and Jellyfin FFmpeg and pass their executable paths to the test. [Jellyfin 12.4 release](https://github.com/jellyfin/jellyfin/releases/tag/v12.4)
+
+```sh
+swift build --build-system native --build-tests --jobs 1 -Xswiftc -DSTOCK_JELLYFIN_TEST --scratch-path .build/stock
+python3 -B -m tools.stock_test --scratch-path .build/stock \
+  --jellyfin /path/to/jellyfin --ffmpeg /path/to/ffmpeg
+```
+
+The check starts a temporary loopback server, signs in with a password and Quick Connect, plays the same FLAC in Original and High through AVPlayer, and verifies a private playlist copy with a repeated song. It removes the fixture server and accounts when it finishes.

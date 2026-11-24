@@ -13,7 +13,7 @@ enum ClientError: Error, Equatable, LocalizedError {
     case .notJellyfinServer:
       "That address didn’t return Jellyfin server information. Use the direct Jellyfin address, including its port or base path."
     case .unsupportedVersion:
-      "This development build supports Jellyfin 12.1 and 12.2. Other versions have not been verified."
+      "This development build supports Jellyfin \(ServerCompatibility.supportedVersions). Other versions have not been verified."
     case .invalidResponse: "The server returned an unexpected response. Try again."
     case .secureStorage:
       "Secure sign-in storage isn’t available. Rebuild the app with normal signing, then try again."
@@ -257,7 +257,11 @@ struct Connection: Identifiable, Codable, Hashable, Sendable {
   }
 }
 enum ServerCompatibility {
-  static let verifiedFamilies: Set<String> = ["12.1", "12.2"]
+  static let verifiedFamilies: Set<String> = ["12.1", "12.2", "12.4"]
+  static var supportedVersions: String {
+    verifiedFamilies.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.formatted(
+      .list(type: .and))
+  }
   static func accepts(_ version: String, families: Set<String> = verifiedFamilies) -> Bool {
     let parts = version.split(separator: ".", omittingEmptySubsequences: false)
     guard (2...3).contains(parts.count),

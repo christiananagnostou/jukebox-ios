@@ -195,7 +195,7 @@
         } else if input.stage == 1 {
           let (connection, token) = try await JellyfinClient.login(
             server: address, username: input.username, password: input.password,
-            deviceID: "acceptance-bytes", allowedFamilies: ["12.1", "12.2"])
+            deviceID: "acceptance-bytes")
           result["ordinary_api_login"] = true
           let api = try JellyfinClient(
             connection: connection, token: token, deviceID: "acceptance-bytes")

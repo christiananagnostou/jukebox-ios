@@ -48,7 +48,7 @@ struct JellyfinAuthentication: Sendable {
   var allowedFamilies = ServerCompatibility.verifiedFamilies
 
   func signInCodeAvailability() async throws -> Bool? {
-    try await checkServer()
+    _ = try await serverInfo()
     try Task.checkCancellation()
     var request = URLRequest(url: try server.endpoint("QuickConnect/Enabled"))
     request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -59,7 +59,7 @@ struct JellyfinAuthentication: Sendable {
     return try? JSONDecoder().decode(Bool.self, from: reply.data)
   }
 
-  private func checkServer() async throws {
+  func serverInfo() async throws -> JellyfinServerInfo {
     try server.requireCredentialTransport()
     var request = URLRequest(url: try server.endpoint("System/Info/Public"))
     request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -71,17 +71,14 @@ struct JellyfinAuthentication: Sendable {
       if reply.status == 429 || reply.status >= 500 { throw ClientError.unavailable }
       throw ClientError.notJellyfinServer
     }
-    struct Info: Decodable {
-      let version: String
-      enum CodingKeys: String, CodingKey { case version = "Version" }
-    }
-    guard let version = try? JSONDecoder().decode(Info.self, from: reply.data).version,
-      !version.isEmpty
+    guard let info = try? JSONDecoder().decode(JellyfinServerInfo.self, from: reply.data),
+      !info.version.isEmpty
     else { throw ClientError.notJellyfinServer }
-    guard ServerCompatibility.accepts(version, families: allowedFamilies) else {
+    guard ServerCompatibility.accepts(info.version, families: allowedFamilies) else {
       throw ClientError.unsupportedVersion
     }
     try Task.checkCancellation()
+    return info
   }
 
   private func send(
@@ -104,7 +101,7 @@ struct JellyfinAuthentication: Sendable {
   }
 
   func password(username: String, password: String) async throws -> (Connection, String) {
-    try await checkServer()
+    let info = try await serverInfo()
     let reply: HTTPReply
     do {
       reply = try await send(
@@ -114,14 +111,14 @@ struct JellyfinAuthentication: Sendable {
       throw ConnectionStepError(
         step: .authentication, error: ClientError.unauthorized, status: reply.status)
     }
-    return try await verifiedAccount(reply, fallbackName: username)
+    return try await verifiedAccount(reply, info: info, fallbackName: username)
   }
 
   func quickConnect(
     pollInterval: Duration = .seconds(5), lifetime: Duration = .seconds(600),
     showCode: @MainActor @Sendable (QuickConnectCode) -> Void
   ) async throws -> (Connection, String) {
-    try await checkServer()
+    let info = try await serverInfo()
     let deadline = ContinuousClock.now.advanced(by: lifetime)
     let start = try await send("QuickConnect/Initiate", method: "POST")
     if [401, 403].contains(start.status) { throw QuickConnectError.disabled }
@@ -178,13 +175,15 @@ struct JellyfinAuthentication: Sendable {
           "Users/AuthenticateWithQuickConnect", method: "POST", body: ["Secret": challenge.secret])
         if [400, 401, 404].contains(reply.status) { throw QuickConnectError.expired }
         guard reply.status == 200 else { throw ClientError.unavailable }
-        return try await verifiedAccount(reply)
+        return try await verifiedAccount(reply, info: info)
       }
     }
     throw QuickConnectError.expired
   }
 
-  private func verifiedAccount(_ reply: HTTPReply, fallbackName: String? = nil) async throws -> (
+  private func verifiedAccount(
+    _ reply: HTTPReply, info: JellyfinServerInfo, fallbackName: String? = nil
+  ) async throws -> (
     Connection, String
   ) {
     struct User: Decodable {
@@ -206,7 +205,8 @@ struct JellyfinAuthentication: Sendable {
     guard let session = try? JSONDecoder().decode(Session.self, from: reply.data),
       !session.user.id.isEmpty, let name = session.user.name ?? fallbackName
     else { throw ConnectionStepError(step: .authentication, error: ClientError.invalidResponse) }
-    let connection = Connection(server: server, userID: session.user.id, username: name)
+    let connection = Connection(
+      server: server, userID: session.user.id, username: name, serverInfo: info)
     let client = try JellyfinClient(
       connection: connection, token: session.accessToken, deviceID: deviceID, transport: transport)
     try await client.verifyIdentity()

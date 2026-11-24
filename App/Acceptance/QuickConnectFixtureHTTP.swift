@@ -8,8 +8,23 @@
     private var secret: String { "invented-challenge-\(issued)" }
     init(codesEnabled: Bool) { self.codesEnabled = codesEnabled }
 
+    static func saveExampleConnections(to storage: LibraryStorage, vault: any TokenVault)
+      async throws
+    {
+      let accounts = try [
+        "https://music.invalid/jellyfin", "http://music.invalid/jellyfin",
+        "https://offline.invalid/jellyfin",
+      ].map {
+        Connection(
+          server: try ServerAddress($0), userID: "fixture-listener", username: "Demo listener")
+      }
+      for account in accounts { try await vault.write("invented-session", account: account.id) }
+      try await storage.saveConnections(accounts)
+    }
+
     func send(_ request: URLRequest) async throws -> HTTPReply {
       try Task.checkCancellation()
+      if request.url?.host == "offline.invalid" { throw URLError(.cannotConnectToHost) }
       guard let url = request.url, url.scheme == "https", url.host == "music.invalid",
         url.path.hasPrefix("/jellyfin/")
       else { throw ClientError.invalidServer }
@@ -18,7 +33,7 @@
       let body: Any
       switch (request.httpMethod, path) {
       case ("GET", "System/Info/Public"):
-        body = ["Version": "12.1.0"]
+        body = ["Version": "12.1.0", "ServerName": "Sample music server"]
       case ("GET", "QuickConnect/Enabled"):
         body = codesEnabled
       case ("POST", "QuickConnect/Initiate"):

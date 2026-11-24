@@ -8,11 +8,11 @@ Jukebox is a native iPhone and iPad music player for stock Jellyfin servers in t
 2. Open `Jukebox.xcodeproj` and select the **Jukebox** scheme. For a physical device, select your development team and a bundle identifier you can sign.
 3. Run the app. Enter your Jellyfin server’s HTTPS address, including any base path, and tap the arrow beside it or press **Continue** on the keyboard. You can also choose **Try invented music** to explore the demo.
 
-To see your saved server address and username, open **Accounts → Connection details**. On the Connect screen, tap the information button beside a saved account. Viewing these details works offline.
+Open **Accounts → Connection details** for the current username, server address, Jellyfin version when available, and selected Music library. Each saved account shows its server address. Tap a saved account to inspect it, then choose **Switch to this account** or **Remove from this iPhone** (or iPad). Removal clears that connection’s saved sign-in, queue and preferences on this device. The Jellyfin user and server library stay intact. On the Connect screen, the information button opens these details offline.
 
 For your first device, choose **Use username and password** and enter your Jellyfin credentials. Jukebox takes you directly to the password screen when the server has sign-in codes turned off.
 
-If you’re already signed in elsewhere, choose **Show a sign-in code** on the new device. On a signed-in Jellyfin browser, open **Settings → Quick Connect**. In a signed-in Jukebox app, open **Accounts → Approve another device**. Enter the code there and tap the approval button. The new device signs in to the account shown.
+If you’re already signed in elsewhere, choose **Show a sign-in code** on the new device. On a signed-in Jellyfin browser, open **Settings → Quick Connect**. In a signed-in Jukebox app, open **Accounts → Quick Connect**. Enter the code there and tap the approval button. The new device signs in to the account shown.
 
 Keep personal server addresses, signing settings and library data local. Use invented accounts and media in contributions and tests.
 

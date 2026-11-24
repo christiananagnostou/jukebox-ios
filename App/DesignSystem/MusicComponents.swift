@@ -478,24 +478,36 @@ struct MusicHeaderActions: ToolbarContent {
           if current(), let account = store.active { accountSheet = .details(account) }
         }
         if store.canApproveQuickConnect {
-          Button("Approve another device", systemImage: "number.square") {
+          Button("Quick Connect", systemImage: "number.square") {
             if current(), let account = store.active { accountSheet = .quickConnect(account) }
           }
         }
         Section {
           ForEach(store.connections) { account in
-            Button(
-              account.username, systemImage: account.id == owner.account ? "checkmark" : "person"
-            ) {
-              Task { if current() { await store.activate(account) } }
+            Button {
+              if current() { accountSheet = .details(account) }
+            } label: {
+              Label(
+                account.username, systemImage: account.id == owner.account ? "checkmark" : "person")
+              Text(verbatim: account.server.url.absoluteString)
             }
+            .accessibilityIdentifier("saved-connection-" + account.id)
           }
           Button("Add account", systemImage: "person.badge.plus") {
             if current() { store.addConnection() }
           }
         }
-        Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+        Button(role: .destructive) {
           Task { if current() { await store.logout() } }
+        } label: {
+          Label {
+            Text("Sign out")
+          } icon: {
+            if let symbol = UIImage(systemName: "arrow.right.circle") {
+              Image(uiImage: symbol.withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                .renderingMode(.original)
+            }
+          }
         }
       } label: {
         Label("Accounts", systemImage: "person.crop.circle").labelStyle(.iconOnly)

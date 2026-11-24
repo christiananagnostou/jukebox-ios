@@ -1210,6 +1210,170 @@ import XCTest
       throw error
     }
   }
+  func testOldSavedAccountsDeduplicateByAddressAndUserIDAndDecodeWithoutServerInfo() async throws {
+    let old = try JSONDecoder().decode(
+      Connection.self,
+      from: Data(
+        #"{"server":{"url":"http://music.invalid/base"},"userID":"one","username":"Demo"}"#.utf8))
+    XCTAssertNil(old.serverInfo)
+    let updated = Connection(
+      server: try ServerAddress("https://music.invalid/base"), userID: "one", username: "Demo")
+    let differentUser = Connection(server: old.server, userID: "two", username: "Demo")
+    let storage = LibraryStorage()
+    try await storage.saveConnections([old, updated, old, differentUser])
+    let saved = try await storage.connections()
+    XCTAssertEqual(saved, [old, updated, differentUser])
+  }
+
+  func testPlayDuringIdentityVerificationKeepsTheOriginalPlayingSession() async throws {
+    let (directory, storage, _, driver) = try context()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let current = Connection(
+      server: try ServerAddress("https://one.invalid"), userID: "a", username: "Demo")
+    let other = Connection(
+      server: try ServerAddress("https://two.invalid"), userID: "a", username: "Demo")
+    let verifying = ControlledCatalog()
+    await verifying.blockIdentity()
+    let store = PlayerStore(
+      storage: storage, vault: ImmediateVault(), driver: driver, deviceID: "test",
+      factory: { c, _ in
+        if c.id == current.id { return ImmediateCatalog() }
+        return verifying
+      })
+    try await storage.saveConnections([current, other])
+    try await storage.save(
+      QueueState(entries: [QueueEntry(MusicItem.fixtureTracks[0], libraryID: "fixture-music")]),
+      account: current.id)
+    await store.bootstrap()
+    store.play()
+    try await wait { store.playing }
+    let activation = Task { await store.activate(other) }
+    try await wait { await verifying.identityEntered }
+    store.play()
+    await verifying.releaseIdentity()
+    await activation.value
+    XCTAssertEqual(store.active, current)
+    XCTAssertTrue(store.playbackRequested)
+    let saved = try await storage.connections()
+    XCTAssertEqual(saved, [current, other])
+  }
+
+  func testRemovingInactiveDuplicatePreservesPlayingAccountAndItsSavedQueue() async throws {
+    let (directory, storage, vault, driver) = try context()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let current = Connection(
+      server: try ServerAddress("https://music.invalid/base"), userID: "listener", username: "Demo")
+    let old = Connection(
+      server: try ServerAddress("http://music.invalid/base"), userID: "listener", username: "Demo")
+    let other = Connection(
+      server: try ServerAddress("https://other.invalid"), userID: "listener", username: "Demo")
+    for account in [current, old, other] {
+      await vault.write("sample", account: account.id)
+      try await storage.save(
+        QueueState(entries: [QueueEntry(MusicItem.fixtureTracks[0], libraryID: "fixture-music")]),
+        account: account.id)
+    }
+    try await storage.saveConnections([current, old, other])
+    let store = PlayerStore(
+      storage: storage, vault: vault, driver: driver, deviceID: "test",
+      factory: { account, _ in
+        guard account.id == current.id else { throw ClientError.invalidServer }
+        return ImmediateCatalog()
+      })
+    await store.bootstrap()
+    store.play()
+    try await wait { store.playing }
+    let browser = store.browser
+    let occurrence = store.current?.id
+    let starts = driver.starts
+    await store.activate(old)
+    XCTAssertTrue(store.playing)
+    XCTAssertEqual(store.active?.id, current.id)
+    try await store.removeSavedConnection(old)
+    XCTAssertTrue(store.browser === browser)
+    XCTAssertEqual(store.current?.id, occurrence)
+    XCTAssertTrue(store.playing)
+    XCTAssertEqual(driver.starts, starts)
+    XCTAssertEqual(store.connections, [current, other])
+    let reopened = try LibraryStorage(directory: directory)
+    let saved = try await reopened.connections()
+    XCTAssertEqual(saved, [current, other])
+    for account in [current, old, other] {
+      let credential = await vault.read(account: account.id)
+      let queue = try await reopened.restore(account: account.id)
+      XCTAssertEqual(credential != nil, account.id != old.id)
+      XCTAssertEqual(queue != nil, account.id != old.id)
+    }
+    do {
+      try await store.removeSavedConnection(current)
+      XCTFail("Removing a saved entry must require an inactive account")
+    } catch is CancellationError {}
+    XCTAssertEqual(store.active, current)
+  }
+
+  func testUnavailableSavedAccountKeepsCurrentPlaybackAndCanBeRemovedWithoutConnecting()
+    async throws
+  {
+    let (directory, storage, vault, driver) = try context()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let current = Connection(
+      server: try ServerAddress("https://one.invalid"), userID: "a", username: "Demo")
+    let other = Connection(
+      server: try ServerAddress("https://two.invalid"), userID: "a", username: "Demo")
+    for c in [current, other] { await vault.write("sample", account: c.id) }
+    try await storage.saveConnections([current, other])
+    try await storage.save(
+      QueueState(entries: [QueueEntry(MusicItem.fixtureTracks[0], libraryID: "fixture-music")]),
+      account: current.id)
+    let store = PlayerStore(
+      storage: storage, vault: vault, driver: driver, deviceID: "test",
+      factory: { c, _ in
+        guard c.id == current.id else { throw URLError(.cannotConnectToHost) }
+        return ImmediateCatalog()
+      })
+    await store.bootstrap()
+    store.play()
+    try await wait { store.playing }
+    let browser = store.browser
+    await store.activate(other)
+    XCTAssertEqual(store.active?.id, current.id)
+    XCTAssertTrue(store.browser === browser)
+    XCTAssertTrue(store.playing)
+    XCTAssertEqual(store.connections, [current, other])
+    XCTAssertNotNil(store.error)
+    try await store.removeSavedConnection(other)
+    XCTAssertEqual(store.connections, [current])
+  }
+
+  func testInterruptedInactiveRemovalCanRetryWithoutLosingTheWorkingAccount() async throws {
+    let (directory, storage, vault, driver) = try context()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let current = Connection(
+      server: try ServerAddress("https://one.invalid"), userID: "a", username: "Demo")
+    let other = Connection(
+      server: try ServerAddress("https://two.invalid"), userID: "a", username: "Demo")
+    for c in [current, other] { await vault.write("sample", account: c.id) }
+    try await storage.saveConnections([current, other])
+    let store = PlayerStore(
+      storage: storage, vault: vault, driver: driver, deviceID: "test",
+      factory: { _, _ in ImmediateCatalog() })
+    await store.bootstrap()
+    let index = directory.appendingPathComponent("connections.json")
+    let indexData = try Data(contentsOf: index)
+    try Data([0]).write(to: index)
+    do {
+      try await store.removeSavedConnection(other)
+      XCTFail("A failed write must leave the saved entry available for retry")
+    } catch is DecodingError {}
+    XCTAssertEqual(store.active, current)
+    XCTAssertEqual(store.connections, [current, other])
+    XCTAssertFalse(store.busy)
+    try indexData.write(to: index)
+    try await store.removeSavedConnection(other)
+    let saved = try await storage.connections()
+    XCTAssertEqual(saved, [current])
+  }
+
   func testSignOutErasesTheCredentialWhenDiskCleanupFailsAndCanRetry() async throws {
     let (directory, storage, vault, store, old, _, _) = try await deferredAuthorizationContext()
     defer { try? FileManager.default.removeItem(at: directory) }

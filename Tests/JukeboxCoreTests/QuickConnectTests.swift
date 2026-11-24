@@ -4,7 +4,8 @@ import XCTest
 
 final class QuickConnectTests: XCTestCase {
   private let server = try! ServerAddress("https://music.invalid/base")
-  private let info = HTTPReply(data: Data(#"{"Version":"12.1.0"}"#.utf8), status: 200)
+  private let info = HTTPReply(
+    data: Data(#"{"Version":"12.1.0","ServerName":"Sample music server"}"#.utf8), status: 200)
   private let challenge = HTTPReply(
     data: Data(#"{"Code":"012345","Secret":"invented/+&"}"#.utf8), status: 200)
   private let waiting = HTTPReply(data: Data(#"{"Authenticated":false}"#.utf8), status: 200)
@@ -189,6 +190,8 @@ final class QuickConnectTests: XCTestCase {
     let connections = try await storage.connections()
     let stored = await vault.read(account: account.id)
     XCTAssertEqual(connections, [account])
+    XCTAssertEqual(account.serverInfo?.name, "Sample music server")
+    XCTAssertEqual(account.serverInfo?.version, "12.1.0")
     XCTAssertEqual(stored, "invented-token")
     XCTAssertTrue(store.canApproveQuickConnect)
     XCTAssertFalse(store.busy)

@@ -3753,7 +3753,7 @@ final class JukeboxUITests: XCTestCase {
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 22))
     XCTAssertTrue(accounts.isHittable)
-    openAccountAction("Approve another device", in: app)
+    openAccountAction("Quick Connect", in: app)
     let field = app.textFields["quick-connect-input"]
     let approve = app.buttons["quick-connect-submit"]
     XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -3978,6 +3978,131 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(address.waitForExistence(timeout: 15))
     XCTAssertFalse(accounts.exists)
     XCTAssertFalse(app.buttons[expected].exists)
+  }
+
+  @MainActor private func launchSavedConnections() -> XCUIApplication {
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--quick-connect-fixture", "--example-saved-connections",
+    ]
+    app.launch()
+    return app
+  }
+
+  @MainActor func testInspectCancelAndRemoveOneOfThreeSameNameConnections() throws {
+    continueAfterFailure = false
+    let app = launchSavedConnections()
+    defer { app.terminate() }
+    let menu = app.buttons["Accounts"]
+    let rows = app.buttons.matching(
+      NSPredicate(
+        format: "identifier BEGINSWITH %@ OR label BEGINSWITH %@", "saved-connection-",
+        "Demo listener"))
+    XCTAssertTrue(menu.waitForExistence(timeout: 12))
+    menu.tap()
+    XCTAssertTrue(rows.element(boundBy: 2).waitForExistence(timeout: 5))
+    rows.element(boundBy: 1).tap()
+    let address = app.staticTexts["connection-server-address"]
+    XCTAssertTrue(address.waitForExistence(timeout: 5))
+    XCTAssertEqual(address.label, "http://music.invalid/jellyfin")
+    XCTAssertFalse(app.buttons["Switch to this account"].exists)
+    let remove = app.buttons["remove-saved-connection"]
+    remove.tap()
+    let confirmation = app.alerts["Remove this saved connection?"]
+    XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      confirmation.staticTexts.matching(
+        NSPredicate(format: "label CONTAINS %@", "http://music.invalid/jellyfin")
+      ).firstMatch.exists)
+    confirmation.buttons["Cancel"].tap()
+    XCTAssertTrue(remove.waitForExistence(timeout: 4))
+    remove.tap()
+    confirmation.buttons["Remove"].tap()
+    XCTAssertTrue(address.waitForNonExistence(timeout: 5))
+    menu.tap()
+    XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 4))
+    XCTAssertEqual(rows.count, 2)
+    rows.element(boundBy: 1).tap()
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "https://offline.invalid/jellyfin")
+    app.buttons["Switch to this account"].tap()
+    XCTAssertTrue(app.staticTexts["connection-action-error"].waitForExistence(timeout: 5))
+    app.buttons["Done"].tap()
+    openAccountAction("Connection details", in: app)
+    XCTAssertTrue(address.waitForExistence(timeout: 4))
+    XCTAssertEqual(address.label, "https://music.invalid/jellyfin")
+    XCTAssertTrue(app.staticTexts["Current account"].exists)
+    XCTAssertFalse(remove.exists)
+    for fact in ["Sample music server", "12.1.0"] {
+      XCTAssertTrue(
+        app.descendants(matching: .any).matching(
+          NSPredicate(format: "label CONTAINS %@ OR value == %@", fact, fact)
+        ).firstMatch.waitForExistence(timeout: 4))
+    }
+  }
+
+  @MainActor func testAccountMenuQuickConnectAndSignOutAppearance() throws {
+    continueAfterFailure = false
+    let app = launchSavedConnections()
+    defer { app.terminate() }
+    let account = app.buttons["Accounts"]
+    XCTAssertTrue(account.waitForExistence(timeout: 12))
+    account.tap()
+    let approve = app.buttons["Quick Connect"]
+    let signOut = app.buttons["Sign out"]
+    XCTAssertTrue(approve.waitForExistence(timeout: 5))
+    XCTAssertTrue(signOut.isHittable)
+    let signOutInk = try menuIconPosition(in: signOut, destructive: true)
+    let regularInk = try menuIconPosition(in: approve, destructive: false)
+    XCTAssertEqual(signOutInk, regularInk, accuracy: 3, "Menu symbols should share a center column")
+    approve.tap()
+    XCTAssertTrue(app.textFields["quick-connect-input"].waitForExistence(timeout: 6))
+    app.buttons["Done"].tap()
+    XCTAssertTrue(account.waitForExistence(timeout: 4))
+    openAccountAction("Sign out", in: app)
+    XCTAssertTrue(app.textFields["sign-in-server"].waitForExistence(timeout: 8))
+    XCTAssertEqual(
+      app.buttons.matching(NSPredicate(format: "label == %@", "Demo listener")).count, 2)
+  }
+
+  @MainActor private func menuIconPosition(in row: XCUIElement, destructive: Bool) throws -> CGFloat
+  {
+    let image = try XCTUnwrap(row.screenshot().image.cgImage)
+    let width = Int(row.frame.width.rounded())
+    let height = Int(row.frame.height.rounded())
+    XCTAssertTrue((60...700).contains(width) && (20...200).contains(height))
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    try rgba.withUnsafeMutableBytes { bytes in
+      let context = try XCTUnwrap(
+        CGContext(
+          data: bytes.baseAddress, width: width, height: height,
+          bitsPerComponent: 8, bytesPerRow: width * 4,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    }
+    var iconColumns = IndexSet()
+    var titlePixels = 0
+    for y in 2..<(height - 2) {
+      for x in 2..<(width - 2) {
+        let i = (y * width + x) * 4
+        let red = Int(rgba[i])
+        let green = Int(rgba[i + 1])
+        let blue = Int(rgba[i + 2])
+        let matches =
+          destructive
+          ? red > 145 && red - green > 55 && red - blue > 40
+          : blue > 150 && blue - red > 25 && green > red
+        guard matches else { continue }
+        if x < 45 { iconColumns.insert(x) } else if x > 48 { titlePixels += 1 }
+      }
+    }
+    if destructive { XCTAssertGreaterThan(titlePixels, 8, "The Sign out text should be red") }
+    let first = try XCTUnwrap(iconColumns.first, "Missing colored menu symbol")
+    let last = try XCTUnwrap(iconColumns.last)
+    XCTAssertGreaterThan(last - first, 6)
+    return row.frame.minX + CGFloat(first + last) / 2
   }
 
   @MainActor func testSavedAccountDetailsOpenOffline() throws {

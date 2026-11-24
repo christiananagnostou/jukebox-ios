@@ -131,9 +131,19 @@ struct LoginScreen: View {
               Task { await store.activate(connection) }
             }
           } label: {
-            Label(connection.username, systemImage: "person.crop.circle")
-              .frame(maxWidth: .infinity, minHeight: MusicUI.target, alignment: .leading)
-              .contentShape(.rect)
+            Label {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: connection.username)
+                Text(verbatim: connection.server.url.absoluteString).font(.footnote)
+                  .foregroundStyle(.secondary)
+              }
+            } icon: {
+              Image(systemName: "person.crop.circle")
+            }
+            .frame(maxWidth: .infinity, minHeight: MusicUI.target, alignment: .leading)
+            .contentShape(.rect)
+            .accessibilityLabel(Text(verbatim: connection.username))
+            .accessibilityValue(Text(verbatim: connection.server.url.absoluteString))
           }
           Button {
             selectedConnection = connection
@@ -151,6 +161,18 @@ struct ConnectionDetails: View {
   @Bindable var store: PlayerStore
   let connection: Connection
   @Environment(\.dismiss) private var dismiss
+  @State private var serverInfo: JellyfinServerInfo?
+  @State private var confirmingRemoval = false
+  @State private var actionError: String?
+  private var isCurrent: Bool { store.active?.id == connection.id }
+  private var removeTitle: LocalizedStringKey {
+    UIDevice.current.userInterfaceIdiom == .pad
+      ? "Remove from this iPad" : "Remove from this iPhone"
+  }
+  private var selectedMusicLibrary: MusicLibrary? {
+    guard isCurrent, let browser = store.browser, browser.metadataIsCurrent else { return nil }
+    return browser.libraries.first { $0.id == browser.libraryID }
+  }
   #if DEBUG
     @State private var captureState = TransportCapture.State.idle
     @State private var captureNotice = ""
@@ -159,28 +181,85 @@ struct ConnectionDetails: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Username") {
-          Text(connection.username).accessibilityIdentifier("connection-username")
+        Section("Account") {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(verbatim: connection.username).font(.headline).accessibilityIdentifier(
+              "connection-username")
+            Text(isCurrent ? "Current account" : "Saved on this device").font(.subheadline)
+              .foregroundStyle(.secondary)
+          }.accessibilityElement(children: .contain)
+          if let library = selectedMusicLibrary {
+            LabeledContent("Music library") { Text(verbatim: library.title) }
+          }
         }
         Section {
-          Text(connection.server.url.absoluteString).font(MusicType.primary.monospaced())
+          Text(verbatim: connection.server.url.absoluteString).font(MusicType.primary.monospaced())
             .textSelection(.enabled).accessibilityIdentifier("connection-server-address")
+          if let info = serverInfo ?? connection.serverInfo {
+            if let name = info.name, !name.isEmpty {
+              LabeledContent("Server name") { Text(verbatim: name) }
+            }
+            LabeledContent("Jellyfin version") { Text(verbatim: info.version) }
+          }
+          LabeledContent("Transport") {
+            Text(verbatim: connection.server.url.scheme?.uppercased() ?? "")
+          }
           Button("Copy server address", systemImage: "doc.on.doc") {
             UIPasteboard.general.string = connection.server.url.absoluteString
           }
         } header: {
-          Text("Server address")
+          Text("Server")
         } footer: {
-          if connection.server.url.scheme == "http" {
+          if !connection.server.supportsCredentials {
             Text("This saved address uses HTTP. Use your server’s HTTPS address to sign in.")
+          } else if serverInfo == nil, connection.serverInfo != nil {
+            Text("Server information from the last sign-in.")
           }
         }
-        Section("App build") {
-          Text(
-            Bundle.main.object(forInfoDictionaryKey: "JukeboxBuildMarker") as? String ?? "Unknown"
-          )
-          .font(MusicType.secondary.monospaced())
-          .accessibilityIdentifier("app-build-marker")
+        if !isCurrent {
+          Section {
+            if connection.server.supportsCredentials {
+              Button("Switch to this account", systemImage: "arrow.triangle.2.circlepath") {
+                Task {
+                  actionError = nil
+                  await store.activate(connection)
+                  if isCurrent || !store.connections.contains(where: { $0.id == connection.id }) {
+                    dismiss()
+                  } else if let error = store.error {
+                    actionError = error
+                    store.dismissError()
+                  }
+                }
+              }
+            }
+            Button(role: .destructive) {
+              confirmingRemoval = true
+            } label: {
+              Label(removeTitle, systemImage: "trash")
+            }
+            .accessibilityIdentifier("remove-saved-connection")
+            if let actionError {
+              Text(actionError).font(.footnote).foregroundStyle(.secondary)
+                .accessibilityIdentifier("connection-action-error")
+            }
+          }.disabled(store.busy || store.pendingSignOut != nil)
+        }
+        Section("About") {
+          LabeledContent("Jukebox version") {
+            Text(
+              verbatim: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String ?? "—")
+          }
+          LabeledContent("Build") {
+            Text(
+              verbatim: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+                ?? "—"
+            )
+            .accessibilityIdentifier("app-build-marker")
+          }
+          DisclosureGroup("Jellyfin user ID") {
+            Text(verbatim: connection.userID).font(.footnote.monospaced()).textSelection(.enabled)
+          }
         }
         if store.active?.id == connection.id, let failure = store.lastPlaybackFailure {
           Section("Latest playback failure") {
@@ -231,7 +310,30 @@ struct ConnectionDetails: View {
           }
         #endif
       }.modifier(MusicFormSurface())
-        .navigationTitle("Connection")
+        .navigationTitle("Connection details")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: connection.id) {
+          guard isCurrent, !store.isFixture else { return }
+          serverInfo = try? await store.serverInfo(for: connection)
+        }
+        .alert("Remove this saved connection?", isPresented: $confirmingRemoval) {
+          Button("Remove", role: .destructive) {
+            Task {
+              do {
+                try await store.removeSavedConnection(connection)
+                dismiss()
+              } catch {
+                actionError =
+                  "Some saved data couldn’t be removed. Try removing this connection again."
+              }
+            }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text(
+            "This removes the saved sign-in, queue, and preferences for \(connection.username) at \(connection.server.url.absoluteString) from this device. Your Jellyfin account and music stay on the server."
+          )
+        }
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
     .presentationDragIndicator(.visible)

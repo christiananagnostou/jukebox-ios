@@ -5,11 +5,6 @@ enum AccountSheet: Hashable, Identifiable {
   case quickConnect(Connection)
 
   var id: Self { self }
-  var account: Connection {
-    switch self {
-    case .details(let account), .quickConnect(let account): account
-    }
-  }
 }
 
 struct QuickConnectSignIn: View {
@@ -50,7 +45,7 @@ struct QuickConnectSignIn: View {
         Text("Keep this screen open. Jukebox signs in automatically after approval.").signInHelp()
         DisclosureGroup("Approving from Jukebox?") {
           Text(
-            "On the signed-in device, open Accounts → Approve another device and enter this code."
+            "On the signed-in device, open Accounts → Quick Connect and enter this code."
           )
           .signInHelp()
         }
@@ -104,7 +99,7 @@ struct QuickConnectApproval: View {
 
   var body: some View {
     NavigationStack {
-      SignInPage(phase == .approved ? "Device approved" : "Approve another device") {
+      SignInPage(phase == .approved ? "Device approved" : "Quick Connect") {
         if phase == .approved {
           Label(
             "Return to the other device to use your Jellyfin account.",

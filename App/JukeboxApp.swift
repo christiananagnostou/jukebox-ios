@@ -228,7 +228,12 @@ import SwiftUI
               await store.bootstrap(autoConnect: false)
             case .interactive:
               if arguments.contains("--quick-connect-fixture") {
-                await store.bootstrap(autoConnect: false)
+                let useSaved = arguments.contains("--example-saved-connections")
+                if useSaved {
+                  try? await QuickConnectFixtureHTTP.saveExampleConnections(
+                    to: storageForAcceptance, vault: vaultForAcceptance)
+                }
+                await store.bootstrap(autoConnect: useSaved)
               } else if arguments.contains("--saved-account-fixture") {
                 if let server = try? ServerAddress("http://offline.invalid/music") {
                   let account = Connection(

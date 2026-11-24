@@ -229,10 +229,27 @@ struct ServerAddress: Codable, Hashable, Sendable {
     return result
   }
 }
+struct JellyfinServerInfo: Codable, Hashable, Sendable {
+  let name: String?
+  let version: String
+
+  enum CodingKeys: String, CodingKey {
+    case name = "ServerName"
+    case version = "Version"
+  }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    version = try values.decode(String.self, forKey: .version)
+    let label = try? values.decode(String.self, forKey: .name).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+    name = label.flatMap { (1...256).contains($0.count) ? $0 : nil }
+  }
+}
 struct Connection: Identifiable, Codable, Hashable, Sendable {
   let server: ServerAddress
   let userID: String
   let username: String
+  var serverInfo: JellyfinServerInfo? = nil
   var id: String {
     SHA256.hash(data: Data((server.url.absoluteString + "\n" + userID).utf8)).map {
       String(format: "%02x", $0)

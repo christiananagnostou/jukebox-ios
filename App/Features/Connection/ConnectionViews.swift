@@ -1,93 +1,143 @@
 import SwiftUI
 
+private enum SignInDestination: Hashable {
+  case methods(ServerAddress)
+  case password(ServerAddress, codesDisabled: Bool)
+  case code(ServerAddress)
+}
+
 struct LoginScreen: View {
   @Bindable var store: PlayerStore
   let fixture: FixtureCatalog
   @State private var address = ""
   @State private var username = ""
-  @State private var password = ""
+  @State private var checking: ServerAddress?
+  @State private var problem: String?
+  @State private var path: [SignInDestination] = []
   @State private var selectedConnection: Connection?
-  @State private var quickConnectServer: ServerAddress?
+  @FocusState private var editingAddress: Bool
+
   private var server: ServerAddress? { try? ServerAddress(address) }
+  private var mayContinue: Bool {
+    server?.url.scheme == "https" && checking == nil && !store.busy && store.pendingSignOut == nil
+  }
+
   var body: some View {
-    NavigationStack {
-      Form {
-        Section {
-          TextField("Server address", text: $address).keyboardType(.URL).textContentType(.URL)
-            .textInputAutocapitalization(.never).autocorrectionDisabled()
-          Button("Sign in with Quick Connect", systemImage: "number.square") {
-            quickConnectServer = server
-          }
-          .disabled(store.busy || store.pendingSignOut != nil || server?.url.scheme != "https")
-        } header: {
-          Text("Jellyfin server")
-        } footer: {
-          Text("Enter your server’s HTTPS address, including any path after the server name.")
-        }
-        Section("Sign in with a password") {
-          TextField("Username", text: $username).textContentType(.username)
-            .textInputAutocapitalization(.never).autocorrectionDisabled()
-          SecureField("Password", text: $password).textContentType(.password)
-          Button {
-            let secret = password
-            password = ""
-            Task { await store.signIn(address: address, username: username, password: secret) }
-          } label: {
-            HStack {
-              Text(store.busy ? "Connecting…" : "Connect")
-              Spacer()
-              if store.busy { ProgressView() } else { Image(systemName: "arrow.right") }
-            }
-          }
-          .disabled(
-            store.busy || store.pendingSignOut != nil || address.isEmpty || username.isEmpty
-              || server?.url.scheme != "https")
-        }
-        if !store.connections.isEmpty {
-          Section("Saved accounts") {
-            ForEach(store.connections) { connection in
-              HStack {
-                Button {
-                  if connection.server.url.scheme == "http" {
-                    address = connection.server.url.absoluteString
-                    username = connection.username
-                    selectedConnection = connection
-                  } else {
-                    Task { await store.activate(connection) }
-                  }
-                } label: {
-                  Label(connection.username, systemImage: "person.crop.circle")
-                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                }
-                Button {
-                  selectedConnection = connection
-                } label: {
-                  Image(systemName: "info.circle")
-                    .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
-                }
-                .accessibilityLabel("Connection details for \(connection.username)")
-              }.buttonStyle(.borderless)
-            }
+    NavigationStack(path: $path) {
+      SignInPage("Connect to Jellyfin") {
+        Text("Your music and account live on your Jellyfin server. Enter its address to connect.")
+          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Server address").font(.subheadline.weight(.semibold))
+          TextField("Server address", text: $address, prompt: Text("https://music.example.org"))
+            .textContentType(.URL).keyboardType(.URL).autocorrectionDisabled()
+            .textInputAutocapitalization(.never).textFieldStyle(.roundedBorder)
+            .focused($editingAddress).submitLabel(.continue).onSubmit(beginCheck)
+            .accessibilityIdentifier("sign-in-server")
+          if let problem {
+            Text(problem).foregroundStyle(.secondary).accessibilityIdentifier(
+              "sign-in-server-error")
+          } else if server?.url.scheme == "http" {
+            Text("Enter your server’s HTTPS address.").font(.footnote).foregroundStyle(.secondary)
+          } else if !address.isEmpty && server == nil && !editingAddress {
+            Text("Use the full HTTPS address, including any path before /web.").font(.footnote)
+              .foregroundStyle(.secondary)
           }
         }
+        SignInButton(checking == nil ? "Continue" : "Checking server…", action: beginCheck)
+          .disabled(!mayContinue).accessibilityIdentifier("sign-in-continue")
+        DisclosureGroup("Where do I find this address?") {
+          Text(
+            "In Jukebox on a signed-in device, open Accounts → Connection details. In a browser, use the HTTPS address before /web, including any path such as /jellyfin. If someone invited you, ask them for the address."
+          )
+          .signInHelp()
+        }
+        if !store.connections.isEmpty { savedAccounts }
         if store.pendingSignOut != nil {
-          Button("Retry sign-out") { Task { await store.finishSignOut() } }.disabled(store.busy)
+          Button("Retry sign-out") { Task { await store.finishSignOut() } }
         }
-        Section {
-          Button("Try invented music") { Task { await store.enterFixture(service: fixture) } }
-            .disabled(store.busy)
-        } footer: {
-          Text("Browse invented albums, artists and songs without connecting a server.")
-        }
-      }.modifier(MusicFormSurface()).navigationTitle("Connect").navigationBarTitleDisplayMode(
-        .inline
-      )
-      .navigationDestination(item: $quickConnectServer) { server in
-        QuickConnectSignIn(store: store, server: server)
+        Button("Try invented music") { Task { await store.enterFixture(service: fixture) } }
+          .font(.subheadline).frame(minHeight: MusicUI.target)
+          .disabled(store.busy || checking != nil || store.pendingSignOut != nil)
       }
-    }.sheet(item: $selectedConnection) { connection in
-      ConnectionDetails(store: store, connection: connection)
+      .onChange(of: address) {
+        checking = nil
+        problem = nil
+      }
+      .task(id: checking) {
+        guard let checking else { return }
+        do {
+          let codes = try await store.signInCodeAvailability(on: checking)
+          try Task.checkCancellation()
+          guard self.checking == checking, self.server == checking, path.isEmpty else { return }
+          self.checking = nil
+          path.append(
+            codes == false ? .password(checking, codesDisabled: true) : .methods(checking))
+        } catch {
+          guard !Task.isCancelled, self.checking == checking else { return }
+          self.checking = nil
+          problem = QuickConnectError.message(for: error)
+        }
+      }
+      .navigationDestination(for: SignInDestination.self) { destination in
+        switch destination {
+        case .methods(let server):
+          SignInMethods(server: server, showCode: { path.append(.code(server)) }) {
+            path.append(.password(server, codesDisabled: false))
+          }.disabled(store.busy || store.pendingSignOut != nil)
+        case .password(let server, let disabled):
+          PasswordSignIn(store: store, server: server, codesDisabled: disabled, username: $username)
+        case .code(let server):
+          QuickConnectSignIn(store: store, server: server) { disabled in
+            guard path.last == .code(server) else { return }
+            path[path.count - 1] = .password(server, codesDisabled: disabled)
+          }
+        }
+      }
     }
+    .sheet(item: $selectedConnection) { ConnectionDetails(store: store, connection: $0) }
+  }
+
+  private func beginCheck() {
+    if server?.url.scheme != "https" {
+      editingAddress = false
+      problem = "Enter the HTTPS address of your Jellyfin server."
+      return
+    }
+    guard mayContinue, let server else { return }
+    editingAddress = false
+    problem = nil
+    checking = server
+  }
+
+  private var savedAccounts: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text("Saved accounts").font(.headline)
+      ForEach(store.connections) { connection in
+        HStack {
+          Button {
+            if connection.server.url.scheme == "http" {
+              address = connection.server.url.absoluteString
+              username = connection.username
+              selectedConnection = connection
+            } else {
+              Task { await store.activate(connection) }
+            }
+          } label: {
+            Label(connection.username, systemImage: "person.crop.circle")
+              .frame(maxWidth: .infinity, minHeight: MusicUI.target, alignment: .leading)
+              .contentShape(.rect)
+          }
+          Button {
+            selectedConnection = connection
+          } label: {
+            Image(systemName: "info.circle").frame(
+              minWidth: MusicUI.target, minHeight: MusicUI.target)
+          }
+          .accessibilityLabel("Connection details for \(connection.username)")
+        }
+      }
+    }.disabled(store.busy || checking != nil)
   }
 }
 struct ConnectionDetails: View {

@@ -23,6 +23,40 @@ final class QuickConnectTests: XCTestCase {
     }
   }
 
+  func testCheckingSignInOptionsNeverIssuesACodeOrSendsCredentials() async throws {
+    for (reply, expected) in [
+      (HTTPReply(data: Data("true".utf8), status: 200), true as Bool?),
+      (HTTPReply(data: Data("false".utf8), status: 200), false),
+      (HTTPReply(data: Data(), status: 404), nil),
+      (HTTPReply(data: Data("{}".utf8), status: 200), nil),
+    ] {
+      let http = ScriptedHTTP(replies: [info, reply])
+      let auth = JellyfinAuthentication(server: server, deviceID: "fixture", transport: http)
+      let availability = try await auth.signInCodeAvailability()
+      XCTAssertEqual(availability, expected)
+      let requests = await http.requests
+      XCTAssertEqual(
+        requests.compactMap { $0.url?.path },
+        ["/base/System/Info/Public", "/base/QuickConnect/Enabled"])
+      XCTAssertTrue(
+        requests.allSatisfy {
+          $0.httpMethod == "GET" && $0.httpBody == nil
+            && $0.value(forHTTPHeaderField: "Authorization") == nil
+        })
+    }
+  }
+
+  func testUnavailableServerStopsBeforeCheckingSignInMethods() async throws {
+    let http = ScriptedHTTP(replies: [.init(data: Data(), status: 503)])
+    let auth = JellyfinAuthentication(server: server, deviceID: "fixture", transport: http)
+    do {
+      _ = try await auth.signInCodeAvailability()
+      XCTFail("Offered sign-in on an unverified server")
+    } catch { XCTAssertEqual(error as? ClientError, .unavailable) }
+    let paths = await http.paths
+    XCTAssertEqual(paths, ["/base/System/Info/Public"])
+  }
+
   @MainActor func testPasswordlessSignInPollsSameChallengeAndVerifiesAccount() async throws {
     let http = ScriptedHTTP(replies: [
       info, challenge, waiting, .init(data: Data(), status: 503), approved, session, identity,

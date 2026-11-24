@@ -60,7 +60,7 @@ actor FixturePlaylists {
     let id = state.playlist.id
     var list = try list(id)
     switch change {
-    case .create: throw ClientError.invalidResponse
+    case .create, .copy: throw ClientError.invalidResponse
     case .rename(let name):
       list.summary = MusicPlaylist(
         id: id, title: try PlaylistMutation.name(name), songCount: list.tracks.count,

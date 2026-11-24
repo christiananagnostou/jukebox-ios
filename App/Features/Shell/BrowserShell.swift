@@ -328,7 +328,12 @@ struct BrowserShell: View {
         if browser.scope == owner, browser.metadataIsCurrent {
           PlaylistDetailView(
             store: store, browser: browser, scope: owner, playlist: playlist, canvas: canvas
-          )
+          ) { copy in
+            guard tab == selectedTab, activePath.wrappedValue.last == route,
+              browser.scope == owner, browser.playlistIndex.permitsOpening(copy.id)
+            else { return }
+            append(.playlist(copy, owner))
+          }
           .id(route)
         }
       case .artistCatalog(let route, let category):

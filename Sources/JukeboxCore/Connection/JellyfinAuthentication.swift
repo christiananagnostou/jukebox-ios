@@ -47,6 +47,18 @@ struct JellyfinAuthentication: Sendable {
   var transport: any HTTPTransport = LiveHTTP()
   var allowedFamilies = ServerCompatibility.verifiedFamilies
 
+  func signInCodeAvailability() async throws -> Bool? {
+    try await checkServer()
+    try Task.checkCancellation()
+    var request = URLRequest(url: try server.endpoint("QuickConnect/Enabled"))
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.timeoutInterval = 5
+    let reply = try? await transport.send(request)
+    try Task.checkCancellation()
+    guard let reply, reply.status == 200 else { return nil }
+    return try? JSONDecoder().decode(Bool.self, from: reply.data)
+  }
+
   private func checkServer() async throws {
     try server.requireCredentialTransport()
     var request = URLRequest(url: try server.endpoint("System/Info/Public"))

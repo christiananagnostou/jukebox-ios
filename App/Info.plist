@@ -15,9 +15,9 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
-	<string>75</string>
+	<string>76</string>
 	<key>JukeboxBuildMarker</key>
-	<string>QuickConnect-2</string>
+	<string>GuidedSignIn-1</string>
 	<key>MinimumOSVersion</key>
 	<string>27.0</string>
 	<key>NSAppTransportSecurity</key>

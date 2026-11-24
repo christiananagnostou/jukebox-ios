@@ -478,7 +478,7 @@ struct MusicHeaderActions: ToolbarContent {
           if current(), let account = store.active { accountSheet = .details(account) }
         }
         if store.canApproveQuickConnect {
-          Button("Quick Connect", systemImage: "number.square") {
+          Button("Approve another device", systemImage: "number.square") {
             if current(), let account = store.active { accountSheet = .quickConnect(account) }
           }
         }

@@ -128,10 +128,17 @@ struct PlaylistDetailView: View {
   let scope: UUID
   let playlist: MusicPlaylist
   let canvas: CGRect
+  let openCopy: (MusicPlaylist) -> Void
   @State private var uncachedContents: PlaylistContents?
   @State private var failure: String?
   @Environment(\.playlistPicker) private var playlistPicker
-  @State private var editing = false
+  private enum ActionSheet: Identifiable {
+    case edit, copy
+    var id: Self { self }
+  }
+  @State private var actionSheet: ActionSheet?
+  @State private var createdCopyID: String?
+  @State private var copyOutsideIndex = false
   @Environment(\.dismiss) private var dismiss
   private var current: MusicPlaylist {
     browser.playlistIndex.items?.first { $0.id == playlist.id } ?? playlist
@@ -191,14 +198,41 @@ struct PlaylistDetailView: View {
       .navigationTitle(current.title).navigationBarTitleDisplayMode(.inline)
       .task(id: browser.playlistIndex.revision) { await load() }
       .refreshable { await load(refresh: true) }
-      .sheet(isPresented: $editing) {
-        PlaylistEditorView(
-          store: store, browser: browser, scope: scope, playlist: current,
-          deleted: {
-            editing = false
-            dismiss()
-          })
+      .sheet(item: $actionSheet, onDismiss: openCreatedCopy) { action in
+        switch action {
+        case .edit:
+          PlaylistEditorView(
+            store: store, browser: browser, scope: scope, playlist: current,
+            deleted: {
+              actionSheet = nil
+              dismiss()
+            }, copied: showCopy)
+        case .copy:
+          NavigationStack {
+            PlaylistCreateForm(browser: browser, scope: scope, copying: current, created: showCopy)
+          }.presentationDragIndicator(.visible)
+        }
       }
+      .alert("Copy created", isPresented: $copyOutsideIndex) {
+        Button("Done", role: .cancel) {}
+      } message: {
+        Text("Refresh Playlists to open the new copy.")
+      }
+  }
+  private func showCopy(_ id: String) {
+    guard browser.scope == scope, browser.metadataIsCurrent else { return }
+    createdCopyID = id
+    actionSheet = nil
+  }
+  private func openCreatedCopy() {
+    guard let id = createdCopyID else { return }
+    createdCopyID = nil
+    guard browser.scope == scope, browser.metadataIsCurrent else { return }
+    if let copy = browser.playlistIndex.items?.first(where: { $0.id == id }) {
+      openCopy(copy)
+    } else {
+      copyOutsideIndex = true
+    }
   }
   private func header(selection: PlaybackSelection?, count: Int?) -> some View {
     VStack(spacing: 12) {
@@ -221,12 +255,18 @@ struct PlaylistDetailView: View {
           }
           .accessibilityLabel("Shuffle playlist")
         }
-        Button {
-          editing = true
+        Menu {
+          Button("Edit playlist", systemImage: "pencil") { actionSheet = .edit }
+            .accessibilityIdentifier("playlist-edit")
+          Button("Make an editable copy", systemImage: "plus.square.on.square") {
+            actionSheet = .copy
+          }
+          .accessibilityIdentifier("playlist-copy")
         } label: {
-          Label("Edit", systemImage: "pencil").frame(minHeight: 44)
+          Image(systemName: "ellipsis.circle").frame(
+            minWidth: MusicUI.target, minHeight: MusicUI.target)
         }
-        .accessibilityLabel("Edit playlist").accessibilityIdentifier("playlist-edit")
+        .accessibilityLabel("Playlist actions").accessibilityIdentifier("playlist-actions")
       }.buttonStyle(MusicButtonStyle())
     }.musicPagePadding().padding(.bottom, 12).frame(maxWidth: .infinity)
   }

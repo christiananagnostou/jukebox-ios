@@ -15,12 +15,14 @@ struct FixtureCatalog {
   let catalogSongLimit: Int?
   let singleLibrary: Bool
   let longAlbum: Bool
+  private let readOnlyMix: Bool
   init(
     source: URL, delay: Duration = .zero, catalogFailure: ClientError? = nil,
     catalogDelay: Duration? = nil, catalogSongLimit: Int? = nil, singleLibrary: Bool = false,
-    longAlbum: Bool = false
+    longAlbum: Bool = false, readOnlyMix: Bool = false
   ) {
     savedLists = FixturePlaylists(large: longAlbum)
+    self.readOnlyMix = readOnlyMix
     self.source = source
     self.delay = delay
     self.catalogFailure = catalogFailure
@@ -471,6 +473,7 @@ extension FixtureCatalog: MusicPlaylistEditing {
   func playlistEditor(
     library: String, playlist: MusicPlaylist, isCurrent: @escaping @MainActor @Sendable () -> Bool
   ) async throws -> PlaylistEditState {
+    if readOnlyMix, playlist.id == "fixture-playlist-morning" { throw PlaylistEditError.readOnly }
     let list = try await savedLists.list(playlist.id)
     let scoped = try await playlistTracks(
       library: library, playlistID: playlist.id, isCurrent: isCurrent)
@@ -492,6 +495,16 @@ extension FixtureCatalog: MusicPlaylistEditing {
       _ = try await playlistEditor(library: library, playlist: state.playlist, isCurrent: isCurrent)
     }
     switch change {
+    case .copy(let source, let name):
+      guard state == nil else { throw ClientError.invalidResponse }
+      let original = try await savedLists.list(source.id)
+      let songs = try await playlistTracks(
+        library: library, playlistID: source.id, isCurrent: isCurrent)
+      guard songs.map(\.id) == original.tracks.map(\.id) else {
+        throw PlaylistEditError.limitedToLibrary
+      }
+      guard await isCurrent(), !Task.isCancelled else { throw CancellationError() }
+      return PlaylistSave(id: try await savedLists.change(state: nil, .create(name, songs)))
     case .create(_, let songs), .append(let songs):
       if !songs.isEmpty {
         let ids = Set(songs.map(\.id))

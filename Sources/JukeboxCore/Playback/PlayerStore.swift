@@ -356,6 +356,9 @@ import Observation
       server: server, deviceID: deviceID, transport: authenticationTransport,
       allowedFamilies: allowedFamilies)
   }
+  func signInCodeAvailability(on server: ServerAddress) async throws -> Bool? {
+    try await authentication(for: server).signInCodeAvailability()
+  }
   func signInWithQuickConnect(
     server: ServerAddress, showCode: @MainActor @Sendable (QuickConnectCode) -> Void
   ) async throws {

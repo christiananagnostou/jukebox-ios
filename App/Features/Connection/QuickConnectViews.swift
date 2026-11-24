@@ -15,6 +15,7 @@ enum AccountSheet: Hashable, Identifiable {
 struct QuickConnectSignIn: View {
   let store: PlayerStore
   let server: ServerAddress
+  let usePassword: (Bool) -> Void
   @State private var attempt = UUID()
   @State private var phase = Phase.starting
 
@@ -25,39 +26,43 @@ struct QuickConnectSignIn: View {
   }
 
   var body: some View {
-    Form {
-      Section {
-        switch phase {
-        case .starting:
-          ProgressView("Getting a sign-in code…")
-        case .waiting(let code):
-          VStack(alignment: .leading, spacing: 12) {
-            Text(verbatim: "\(code.digits.prefix(3)) \(code.digits.suffix(3))")
-              .font(.largeTitle.weight(.semibold).monospacedDigit())
-              .accessibilityLabel("Sign-in code")
-              .accessibilityValue(code.digits.map(String.init).joined(separator: " "))
-              .accessibilityIdentifier("quick-connect-code").privacySensitive()
-            Label("Waiting for approval", systemImage: "clock")
-              .font(.subheadline).foregroundStyle(.secondary)
-          }.padding(.vertical, 4)
-        case .failed(let message):
-          Label(message, systemImage: "exclamationmark.circle")
-          Button("Get a new code", systemImage: "arrow.clockwise") {
-            phase = .starting
-            attempt = UUID()
-          }
-        }
-      } header: {
-        Text("Sign in to Jukebox")
-      } footer: {
+    SignInPage("Use your other device") {
+      switch phase {
+      case .starting:
+        ProgressView("Getting a sign-in code…")
+      case .waiting(let code):
         Text(
-          "On a device signed in to this Jellyfin server, open Quick Connect and enter the six-digit code shown here."
+          "In a browser already signed in to this Jellyfin server, open **Settings → Quick Connect** and enter this code."
         )
+        .foregroundStyle(.secondary)
+        VStack(spacing: 6) {
+          Text("Sign-in code").font(.subheadline).foregroundStyle(.secondary)
+          Text(verbatim: "\(code.digits.prefix(3)) \(code.digits.suffix(3))")
+            .font(.largeTitle.weight(.semibold).monospacedDigit())
+            .accessibilityLabel("Sign-in code")
+            .accessibilityValue(code.digits.map(String.init).joined(separator: " "))
+            .accessibilityIdentifier("quick-connect-code").privacySensitive()
+          Label("Waiting for approval", systemImage: "clock").font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+        .padding().frame(maxWidth: .infinity)
+        .background(MusicUI.panel, in: .rect(cornerRadius: 16))
+        Text("Keep this screen open. Jukebox signs in automatically after approval.").signInHelp()
+        DisclosureGroup("Approving from Jukebox?") {
+          Text(
+            "On the signed-in device, open Accounts → Approve another device and enter this code."
+          )
+          .signInHelp()
+        }
+      case .failed(let message):
+        Label(message, systemImage: "exclamationmark.circle")
+        SignInButton("Get a new code") {
+          phase = .starting
+          attempt = UUID()
+        }
       }
-      Section("Server") { Text(server.url.absoluteString) }
+      Button("Use my password instead") { usePassword(false) }.frame(minHeight: MusicUI.target)
     }
-    .modifier(MusicFormSurface())
-    .navigationTitle("Quick Connect").navigationBarTitleDisplayMode(.inline)
     .task(id: attempt) {
       let current = attempt
       do {
@@ -65,7 +70,10 @@ struct QuickConnectSignIn: View {
           if !Task.isCancelled, current == attempt { phase = .waiting(code) }
         }
       } catch {
-        if !Task.isCancelled, current == attempt {
+        guard !Task.isCancelled, current == attempt else { return }
+        if error as? QuickConnectError == .disabled {
+          usePassword(true)
+        } else {
           phase = .failed(QuickConnectError.message(for: error))
         }
       }
@@ -95,55 +103,49 @@ struct QuickConnectApproval: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      SignInPage(phase == .approved ? "Device approved" : "Approve another device") {
         if phase == .approved {
-          Section {
-            Label("Device approved", systemImage: "checkmark.circle.fill").font(.headline)
-              .accessibilityIdentifier("quick-connect-approved")
-            Text("Finish signing in on the other device.")
-          }
+          Label(
+            "Return to the other device to use your Jellyfin account.",
+            systemImage: "checkmark.circle.fill"
+          )
+          .accessibilityIdentifier("quick-connect-approved")
         } else {
-          Section {
-            TextField("Six-digit code", text: $input)
+          Text("Enter the code shown on the device you want to sign in.").foregroundStyle(
+            .secondary)
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Code from the other device").font(.subheadline.weight(.semibold))
+            TextField("Six-digit code", text: $input, prompt: Text("000 000"))
               .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($editing)
-              .font(.title2.monospacedDigit()).disabled(submitting)
-              .accessibilityIdentifier("quick-connect-input")
-              .autocorrectionDisabled().privacySensitive()
+              .font(.title2.monospacedDigit()).textFieldStyle(.roundedBorder).disabled(submitting)
+              .accessibilityIdentifier("quick-connect-input").autocorrectionDisabled()
+              .privacySensitive()
               .onChange(of: input) { if case .failed = phase { phase = .entry } }
-            if case .failed(let message) = phase {
-              Label(message, systemImage: "exclamationmark.circle")
-                .accessibilityIdentifier("quick-connect-approval-error")
-            }
-            Button {
-              guard !submitting, let code = QuickConnectCode(input) else { return }
-              editing = false
-              phase = .submitting(code)
-            } label: {
-              if submitting {
-                ProgressView("Approving…")
-              } else {
-                Label("Approve sign-in", systemImage: "checkmark")
-              }
-            }
-            .disabled(submitting || QuickConnectCode(input) == nil)
-          } header: {
-            Text("Approve a device")
-          } footer: {
-            Text("Enter the code shown on the device you want to sign in to your account.")
           }
-        }
-        Section("Account") {
-          LabeledContent("Username", value: account.username)
-          LabeledContent("Server", value: account.server.url.absoluteString)
+          if case .failed(let message) = phase {
+            Label(message, systemImage: "exclamationmark.circle")
+              .accessibilityIdentifier("quick-connect-approval-error")
+          }
+          Text(
+            "Approving signs that device in as **\(account.username)** on \(account.server.url.absoluteString)."
+          )
+          .font(.footnote).accessibilityIdentifier("quick-connect-grant")
+          SignInButton(submitting ? "Approving…" : "Approve sign-in") {
+            guard !submitting, let code = QuickConnectCode(input) else { return }
+            editing = false
+            phase = .submitting(code)
+          }
+          .disabled(submitting || QuickConnectCode(input) == nil)
+          .accessibilityIdentifier("quick-connect-submit")
         }
       }
-      .modifier(MusicFormSurface())
-      .navigationTitle("Quick Connect").navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }.disabled(submitting)
+        }
       }
     }
-    .presentationDragIndicator(.visible)
+    .presentationDragIndicator(.visible).interactiveDismissDisabled(submitting)
     .task(id: phase) {
       guard case .submitting(let code) = phase else { return }
       do {

@@ -169,7 +169,7 @@ import SwiftUI
     let accountFixture: (any HTTPTransport)?
     #if DEBUG
       if case .interactive = transport, args.contains("--quick-connect-fixture") {
-        accountFixture = QuickConnectFixtureHTTP()
+        accountFixture = QuickConnectFixtureHTTP(codesEnabled: !args.contains("--codes-disabled"))
       } else {
         accountFixture = nil
       }
@@ -198,7 +198,8 @@ import SwiftUI
         ? .seconds(5) : nil,
       catalogSongLimit: fixtureMode && args.contains("--window-fixture") ? 160 : nil,
       singleLibrary: fixtureMode && args.contains("--single-library"),
-      longAlbum: fixtureMode && args.contains("--long-album"))
+      longAlbum: fixtureMode && args.contains("--long-album"),
+      readOnlyMix: fixtureMode && args.contains("--read-only-mix"))
     fixture = catalogFixture
     profiling =
       startup.3

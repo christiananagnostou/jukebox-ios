@@ -636,7 +636,7 @@ final class JukeboxUITests: XCTestCase {
       app.terminate()
       app.launchArguments = ["--connect"]
       app.launch()
-      XCTAssertTrue(app.textFields["Server address"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.textFields["sign-in-server"].waitForExistence(timeout: 5))
       capture(large ? "connect-shared-accessibility" : "connect-shared-surface", app: app)
       app.terminate()
     }
@@ -3661,6 +3661,25 @@ final class JukeboxUITests: XCTestCase {
       XCTAssertTrue(tab.isSelected)
     }
   }
+  @MainActor private func typeAccountText(
+    _ text: String, into field: XCUIElement, in app: XCUIApplication, expecting value: String? = nil
+  ) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    var previousFrame = CGRect.null
+    while clock.now < deadline {
+      let frame = field.frame
+      if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.typeText(text)
+        if let value { XCTAssertEqual(field.value as? String, value) }
+        return
+      }
+      previousFrame = frame
+      try await Task.sleep(for: .milliseconds(180))
+    }
+    XCTFail("The text field did not settle inside the app window")
+  }
   @MainActor func testQuickConnectSignInCancellationAndDeviceApproval() async throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -3669,29 +3688,18 @@ final class JukeboxUITests: XCTestCase {
     ]
     app.launch()
     defer { app.terminate() }
-    func type(_ text: String, into field: XCUIElement, expecting value: String) async throws {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(5))
-      var previousFrame = CGRect.null
-      while clock.now < deadline {
-        let frame = field.frame
-        if field.isHittable, !frame.isEmpty, app.frame.contains(frame), frame == previousFrame {
-          field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-          app.typeText(text)
-          XCTAssertEqual(field.value as? String, value)
-          return
-        }
-        previousFrame = frame
-        try await Task.sleep(for: .milliseconds(180))
-      }
-      XCTFail("The text field did not settle inside the app window")
-    }
-    let address = app.textFields["Server address"]
-    let start = app.buttons["Sign in with Quick Connect"]
+    let address = app.textFields["sign-in-server"]
+    let next = app.buttons["sign-in-continue"]
+    let start = app.buttons["sign-in-show-code"]
     XCTAssertTrue(address.waitForExistence(timeout: 8))
-    XCTAssertFalse(start.isEnabled)
+    XCTAssertFalse(next.isEnabled)
+    XCTAssertFalse(start.exists)
+    XCTAssertFalse(app.secureTextFields.firstMatch.exists)
     let url = "https://music.invalid/jellyfin"
-    try await type(url, into: address, expecting: url)
+    try await typeAccountText(url, into: address, in: app, expecting: url)
+    next.tap()
+    XCTAssertTrue(start.waitForExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["sign-in-password-method"].exists)
     start.tap()
     let code = app.staticTexts["quick-connect-code"]
     XCTAssertTrue(code.waitForExistence(timeout: 5))
@@ -3699,7 +3707,9 @@ final class JukeboxUITests: XCTestCase {
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(start.waitForExistence(timeout: 5))
     XCTAssertTrue(start.wait(for: \.isEnabled, toEqual: true, timeout: 5))
-    XCTAssertEqual(address.value as? String, url)
+    XCTAssertEqual(
+      app.descendants(matching: .any).matching(identifier: "sign-in-method-server").firstMatch
+        .label, url)
     start.tap()
     XCTAssertTrue(code.waitForExistence(timeout: 5))
     XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
@@ -3707,16 +3717,16 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(accounts.waitForExistence(timeout: 22))
     XCTAssertTrue(accounts.isHittable)
     accounts.tap()
-    app.buttons["Quick Connect"].tap()
+    app.buttons["Approve another device"].tap()
     let field = app.textFields["quick-connect-input"]
-    let approve = app.buttons["Approve sign-in"]
+    let approve = app.buttons["quick-connect-submit"]
     XCTAssertTrue(field.waitForExistence(timeout: 5))
     XCTAssertTrue(
       app.descendants(matching: .any).matching(
         NSPredicate(format: "label CONTAINS %@ OR value == %@", "Demo listener", "Demo listener")
       ).firstMatch.exists)
     XCTAssertFalse(approve.isEnabled)
-    try await type("999999", into: field, expecting: "999999")
+    try await typeAccountText("999999", into: field, in: app, expecting: "999999")
     XCTAssertTrue(approve.isEnabled)
     approve.tap()
     let error = app.descendants(matching: .any).matching(identifier: "quick-connect-approval-error")
@@ -3724,7 +3734,7 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertTrue(error.waitForExistence(timeout: 5))
     XCTAssertTrue(error.label.contains("invalid or has expired"))
     let clear = String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6)
-    try await type(clear + "246810", into: field, expecting: "246810")
+    try await typeAccountText(clear + "246810", into: field, in: app, expecting: "246810")
     XCTAssertTrue(approve.isEnabled)
     let success = app.descendants(matching: .any).matching(identifier: "quick-connect-approved")
       .firstMatch
@@ -3734,6 +3744,36 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(accounts.waitForExistence(timeout: 5))
   }
+  @MainActor func testFirstDeviceSignsInWithPasswordWhenCodesAreDisabled() async throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--quick-connect-fixture", "--codes-disabled",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let address = app.textFields["sign-in-server"]
+    XCTAssertTrue(address.waitForExistence(timeout: 8))
+    XCTAssertFalse(app.textFields["Username"].exists)
+    let url = "https://music.invalid/jellyfin"
+    try await typeAccountText(url, into: address, in: app, expecting: url)
+    app.buttons["sign-in-continue"].tap()
+    XCTAssertTrue(app.staticTexts["sign-in-codes-disabled"].waitForExistence(timeout: 6))
+    XCTAssertFalse(app.buttons["sign-in-show-code"].exists)
+    let username = app.textFields["Username"]
+    try await typeAccountText("Listener", into: username, in: app, expecting: "Listener")
+    let password = app.secureTextFields["Password"]
+    try await typeAccountText("fixture", into: password, in: app)
+    app.buttons["sign-in-password-submit"].tap()
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+    accounts.tap()
+    app.buttons["Connection details"].tap()
+    XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
+    XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)
+  }
+
   @MainActor func testSavedAccountDetailsOpenOffline() throws {
     continueAfterFailure = false
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -3759,11 +3799,11 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Offline listener"].tap()
     XCTAssertTrue(address.waitForExistence(timeout: 4))
     app.buttons["Done"].tap()
-    let field = app.textFields["Server address"]
+    let field = app.textFields["sign-in-server"]
     XCTAssertTrue(field.waitForExistence(timeout: 4))
     XCTAssertEqual(field.value as? String, "http://offline.invalid/music")
-    XCTAssertEqual(app.textFields["Username"].value as? String, "Offline listener")
-    XCTAssertFalse(app.buttons["Connect"].isEnabled)
+    XCTAssertFalse(app.textFields["Username"].exists)
+    XCTAssertFalse(app.buttons["sign-in-continue"].isEnabled)
   }
   @MainActor func testActiveConnectionDetailsAtLargeText() throws {
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
@@ -4130,6 +4170,67 @@ extension JukeboxUITests {
     ) { _ in }
   }
 
+  @MainActor func testReadOnlyPlaylistOpensEditableCopyWithOriginalOrderAndRepeats() throws {
+    continueAfterFailure = false
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments = [
+      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+      "--read-only-mix",
+    ]
+    app.launch()
+    defer { app.terminate() }
+    let library = app.tabBars.buttons["Library"]
+    XCTAssertTrue(library.waitForExistence(timeout: 8))
+    library.tap()
+    app.buttons["music-category-Playlists"].tap()
+    let list = app.buttons["playlist-fixture-playlist-morning"]
+    XCTAssertTrue(list.waitForExistence(timeout: 6))
+    list.tap()
+    let heading = app.staticTexts["playlist-heading"]
+    let actions = app.buttons["playlist-actions"]
+    let rows = (1...3).map { app.buttons["playlist-track-" + String($0)] }
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 6))
+    let original = rows.map(\.label)
+    XCTAssertEqual(original[0], original[2])
+    XCTAssertNotEqual(original[0], original[1])
+    actions.tap()
+    app.buttons["Make an editable copy"].tap()
+    let name = app.textFields["playlist-name"]
+    XCTAssertTrue(name.waitForExistence(timeout: 5))
+    XCTAssertEqual(name.value as? String, "Morning rotation (Editable copy)")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(actions.waitForExistence(timeout: 5))
+    actions.tap()
+    app.buttons["Edit playlist"].tap()
+    let copy = app.buttons["playlist-readonly-copy"]
+    XCTAssertTrue(copy.waitForExistence(timeout: 5))
+    copy.tap()
+    app.buttons["playlist-create-save"].tap()
+    XCTAssertTrue(
+      heading.wait(for: \.label, toEqual: "Morning rotation (Editable copy)", timeout: 10))
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 5))
+    XCTAssertEqual(rows.map(\.label), original)
+    actions.tap()
+    app.buttons["Edit playlist"].tap()
+    let sharing = app.buttons["playlist-sharing"]
+    XCTAssertTrue(sharing.waitForExistence(timeout: 5))
+    sharing.tap()
+    let visibility = app.switches["playlist-public"]
+    XCTAssertTrue(visibility.waitForExistence(timeout: 5))
+    XCTAssertEqual(visibility.value as? String, "0")
+    app.navigationBars.buttons["Back"].firstMatch.tap()
+    app.buttons["playlist-edit-order"].tap()
+    app.buttons["playlist-entry-3"].tap()
+    app.buttons["Move up"].firstMatch.tap()
+    app.navigationBars.buttons["Back"].firstMatch.tap()
+    app.buttons["playlist-editor-done"].tap()
+    XCTAssertTrue(rows[2].waitForExistence(timeout: 5))
+    XCTAssertEqual(rows.map(\.label), [original[0], original[2], original[1]])
+    app.navigationBars.buttons["Back"].firstMatch.tap()
+    XCTAssertTrue(heading.wait(for: \.label, toEqual: "Morning rotation", timeout: 5))
+    XCTAssertEqual(rows.map(\.label), original)
+  }
+
   @MainActor func testPlaylistCreateAddRenameAndDelete() throws {
     let app = launchMutedPlaylistFixture()
     app.tabBars.buttons["Library"].tap()
@@ -4140,9 +4241,11 @@ extension JukeboxUITests {
     name.tap()
     name.typeText("Road mix")
     app.buttons["playlist-create-save"].tap()
-    let edit = app.buttons["playlist-edit"]
-    XCTAssertTrue(edit.waitForExistence(timeout: 6))
+    let actions = app.buttons["playlist-actions"]
+    let edit = app.buttons["Edit playlist"]
+    XCTAssertTrue(actions.waitForExistence(timeout: 6))
     XCTAssertEqual(app.staticTexts["playlist-heading"].label, "Road mix")
+    actions.tap()
     edit.tap()
     let add = app.buttons["playlist-add-songs"]
     XCTAssertTrue(add.waitForExistence(timeout: 6))
@@ -4167,6 +4270,7 @@ extension JukeboxUITests {
     XCTAssertTrue(app.buttons["playlist-track-1"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.buttons["playlist-track-1"].label, app.buttons["playlist-track-2"].label)
     XCTAssertEqual(app.staticTexts["playlist-heading"].label, "Road mix two")
+    actions.tap()
     edit.tap()
     app.buttons["playlist-edit-order"].tap()
     app.buttons["playlist-entry-2"].tap()
@@ -4197,7 +4301,8 @@ extension JukeboxUITests {
     let card = app.buttons["playlist-fixture-playlist-morning"]
     XCTAssertTrue(card.waitForExistence(timeout: 5))
     card.tap()
-    app.buttons["playlist-edit"].tap()
+    app.buttons["playlist-actions"].tap()
+    app.buttons["Edit playlist"].tap()
     let cover = app.buttons["playlist-track-cover"]
     XCTAssertTrue(cover.waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["playlist-choose-cover"].exists)

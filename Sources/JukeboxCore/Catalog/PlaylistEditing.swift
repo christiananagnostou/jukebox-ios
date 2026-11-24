@@ -2,7 +2,7 @@ import Foundation
 
 enum PlaylistEditError: Error, LocalizedError, Equatable {
   case readOnly, changed, ambiguousEntry, limitedToLibrary, invalidName, uncertain,
-    coverPermission
+    coverPermission, copyUnconfirmed
 
   var errorDescription: String? {
     switch self {
@@ -14,6 +14,8 @@ enum PlaylistEditError: Error, LocalizedError, Equatable {
     case .invalidName: "Enter a playlist name of 1 to 128 characters."
     case .uncertain: "The change couldn’t be confirmed. Refresh the playlist before trying again."
     case .coverPermission: "This Jellyfin account can’t change playlist artwork."
+    case .copyUnconfirmed:
+      "Jellyfin may have created the copy. Check your playlists before making another."
     }
   }
 }
@@ -101,6 +103,7 @@ enum PlaylistMutation: Sendable {
   case visibility(Bool)
   case share(String, Bool?)
   case create(String, [MusicItem])
+  case copy(MusicPlaylist, name: String)
 
   var changesSharingOnly: Bool {
     switch self {

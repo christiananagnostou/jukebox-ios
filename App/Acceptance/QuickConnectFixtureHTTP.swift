@@ -2,9 +2,11 @@
   import Foundation
 
   actor QuickConnectFixtureHTTP: HTTPTransport {
+    private let codesEnabled: Bool
     private var issued = 0
     private var polls = 0
     private var secret: String { "invented-challenge-\(issued)" }
+    init(codesEnabled: Bool) { self.codesEnabled = codesEnabled }
 
     func send(_ request: URLRequest) async throws -> HTTPReply {
       try Task.checkCancellation()
@@ -17,7 +19,10 @@
       switch (request.httpMethod, path) {
       case ("GET", "System/Info/Public"):
         body = ["Version": "12.1.0"]
+      case ("GET", "QuickConnect/Enabled"):
+        body = codesEnabled
       case ("POST", "QuickConnect/Initiate"):
+        guard codesEnabled else { return HTTPReply(data: Data(), status: 403) }
         issued += 1
         polls = 0
         body = ["Code": String(120_000 + issued), "Secret": secret]
@@ -31,10 +36,14 @@
         guard polls >= 2, let data = request.httpBody,
           try JSONDecoder().decode([String: String].self, from: data)["Secret"] == secret
         else { throw ClientError.unauthorized }
-        body = [
-          "User": ["Id": "fixture-listener", "Name": "Demo listener"],
-          "AccessToken": "invented-session",
-        ]
+        body = signedInAccount
+      case ("POST", "Users/AuthenticateByName"):
+        guard let data = request.httpBody,
+          try JSONDecoder().decode([String: String].self, from: data) == [
+            "Username": "Listener", "Pw": "fixture",
+          ]
+        else { return HTTPReply(data: Data(), status: 401) }
+        body = signedInAccount
       case ("GET", "Users/Me"):
         body = ["Id": "fixture-listener", "Name": "Demo listener"]
       case ("POST", "QuickConnect/Authorize"):
@@ -60,6 +69,12 @@
       return HTTPReply(
         data: try JSONSerialization.data(withJSONObject: body, options: .fragmentsAllowed),
         status: 200)
+    }
+    private var signedInAccount: [String: Any] {
+      [
+        "User": ["Id": "fixture-listener", "Name": "Demo listener"],
+        "AccessToken": "invented-session",
+      ]
     }
   }
 #endif

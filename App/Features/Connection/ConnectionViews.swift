@@ -39,6 +39,7 @@ struct LoginScreen: View {
               "sign-in-server-error")
           } else if server?.url.scheme == "http" {
             Text("Enter your server’s HTTPS address.").font(.footnote).foregroundStyle(.secondary)
+              .accessibilityIdentifier("sign-in-insecure-address")
           } else if !address.isEmpty && server == nil && !editingAddress {
             Text("Use the full HTTPS address, including any path before /web.").font(.footnote)
               .foregroundStyle(.secondary)
@@ -119,7 +120,7 @@ struct LoginScreen: View {
             if connection.server.url.scheme == "http" {
               address = connection.server.url.absoluteString
               username = connection.username
-              selectedConnection = connection
+              editingAddress = true
             } else {
               Task { await store.activate(connection) }
             }

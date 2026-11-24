@@ -3643,15 +3643,11 @@ final class JukeboxUITests: XCTestCase {
     app.launch()
     defer { app.terminate() }
     let tabs = app.tabBars.firstMatch
-    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     for title in ["Home", "Library", "Search"] {
       let tab = tabs.buttons[title]
       XCTAssertTrue(tab.waitForExistence(timeout: 8))
       tab.tap()
-      XCTAssertTrue(accounts.waitForExistence(timeout: 5))
-      XCTAssertTrue(accounts.isHittable)
-      accounts.tap()
-      app.buttons["Connection details"].tap()
+      openAccountAction("Connection details", in: app)
       let address = app.staticTexts["connection-server-address"]
       XCTAssertTrue(address.waitForExistence(timeout: 4))
       XCTAssertEqual(address.label, "https://fixture.invalid")
@@ -3660,6 +3656,19 @@ final class JukeboxUITests: XCTestCase {
       XCTAssertTrue(address.waitForNonExistence(timeout: 4))
       XCTAssertTrue(tab.isSelected)
     }
+  }
+  @MainActor private func openAccountAction(_ title: String, in app: XCUIApplication) {
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    let action = app.buttons[title]
+    XCTAssertTrue(accounts.waitForExistence(timeout: 8))
+    for _ in 0..<2 {
+      accounts.tap()
+      if action.waitForExistence(timeout: 5) {
+        action.tap()
+        return
+      }
+    }
+    XCTFail("The Accounts menu did not present \(title)")
   }
   @MainActor private func typeAccountText(
     _ text: String, into field: XCUIElement, in app: XCUIApplication, expecting value: String? = nil
@@ -3716,8 +3725,7 @@ final class JukeboxUITests: XCTestCase {
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 22))
     XCTAssertTrue(accounts.isHittable)
-    accounts.tap()
-    app.buttons["Approve another device"].tap()
+    openAccountAction("Approve another device", in: app)
     let field = app.textFields["quick-connect-input"]
     let approve = app.buttons["quick-connect-submit"]
     XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -3768,8 +3776,7 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["sign-in-password-submit"].tap()
     let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 10))
-    accounts.tap()
-    app.buttons["Connection details"].tap()
+    openAccountAction("Connection details", in: app)
     XCTAssertEqual(app.staticTexts["connection-username"].label, "Demo listener")
     XCTAssertEqual(app.staticTexts["connection-server-address"].label, url)
   }
@@ -3797,11 +3804,12 @@ final class JukeboxUITests: XCTestCase {
     app.buttons["Done"].tap()
     XCTAssertTrue(details.waitForExistence(timeout: 4))
     app.buttons["Offline listener"].tap()
-    XCTAssertTrue(address.waitForExistence(timeout: 4))
-    app.buttons["Done"].tap()
     let field = app.textFields["sign-in-server"]
-    XCTAssertTrue(field.waitForExistence(timeout: 4))
-    XCTAssertEqual(field.value as? String, "http://offline.invalid/music")
+    XCTAssertTrue(app.staticTexts["sign-in-insecure-address"].waitForExistence(timeout: 5))
+    let prefilled = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", "http://offline.invalid/music"), object: field)
+    XCTAssertEqual(XCTWaiter.wait(for: [prefilled], timeout: 5), .completed)
+    XCTAssertFalse(address.exists)
     XCTAssertFalse(app.textFields["Username"].exists)
     XCTAssertFalse(app.buttons["sign-in-continue"].isEnabled)
   }

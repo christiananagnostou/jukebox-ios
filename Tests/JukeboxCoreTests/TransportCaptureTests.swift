@@ -292,6 +292,24 @@ final class TransportCaptureTests: XCTestCase {
 }
 
 final class TransportControlEntryTests: XCTestCase {
+  func testPlaylistCopyAndDisabledCodeScenariosUseIsolatedFixtureStartup() {
+    let id = UUID()
+    let base = ["--fixture", "--muted", "--transport-ui=" + id.uuidString]
+    for options in [["--read-only-mix"], ["--quick-connect-fixture", "--codes-disabled"]] {
+      let launch = TransportControlLaunch(arguments: base + options)
+      XCTAssertTrue(launch.startup(normal: { false }, isolated: { true }))
+      #if DEBUG
+        guard case .interactive(let launchedID) = launch else {
+          XCTFail("Expected the requested isolated UI scenario")
+          continue
+        }
+        XCTAssertEqual(launchedID, id)
+        XCTAssertNil(launch.runID)
+      #else
+        if case .rejected = launch {} else { XCTFail("Release admitted a test fixture") }
+      #endif
+    }
+  }
   func testInteractiveEntrySelectsOnlyIsolatedDependenciesAndOwnsNoTransportFiles() {
     let id = "00000000-0000-0000-0000-000000000001"
     let arguments = ["--fixture", "--muted", "--transport-ui=" + id]
@@ -361,6 +379,8 @@ final class TransportControlEntryTests: XCTestCase {
       arguments + ["--session-check=" + id], arguments + ["--artwork-check=" + id],
       arguments + ["--window-fixture"], arguments + ["--fixture-rtl"],
       arguments + ["--unknown"], arguments + ["unexpected-payload"],
+      arguments + ["--codes-disabled"], arguments + ["--read-only-mix", "--saved-account-fixture"],
+      arguments + ["--codes-disabled", "--quick-connect-fixture", "--read-only-mix"],
     ]
     for values in malformed {
       let launch = TransportControlLaunch(arguments: values)

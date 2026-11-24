@@ -1355,38 +1355,42 @@ private final class BridgeHeldSocket: Sendable {
     let bridge = MediaHTTPBridge(protocolClasses: [BridgeFixtureProtocol.self])
     try await bridge.start()
     let token = String(try bridge.register(source).path.dropFirst(3))
-    let entered = Mutex(false)
+    final class Progress: Sendable {
+      struct State: Sendable {
+        var entered = false
+        var attempted = false
+        var order: [Int] = []
+      }
+      let state = Mutex(State())
+    }
+    let progress = Progress()
     let release = DispatchSemaphore(value: 0)
-    let attempted = Mutex(false)
-    let retired = Mutex(false)
-    let order = Mutex<[Int]>([])
     defer {
       release.signal()
       bridge.stop()
     }
     let publisher = Task.detached {
       try bridge.withLiveCapability(token) {
-        entered.withLock { $0 = true }
+        progress.state.withLock { $0.entered = true }
         release.wait()
-        order.withLock { $0.append(1) }
+        progress.state.withLock { $0.order.append(1) }
       }
     }
-    try await wait { entered.withLock { $0 } }
+    try await wait { progress.state.withLock { $0.entered } }
     let retirement = Task.detached {
-      attempted.withLock { $0 = true }
+      progress.state.withLock { $0.attempted = true }
       bridge.stop()
-      order.withLock { $0.append(2) }
-      retired.withLock { $0 = true }
+      progress.state.withLock { $0.order.append(2) }
     }
-    try await wait { attempted.withLock { $0 } }
+    try await wait { progress.state.withLock { $0.attempted } }
     try await Task.sleep(for: .milliseconds(200))
     XCTAssertFalse(
-      retired.withLock { $0 },
+      progress.state.withLock { $0.order.contains(2) },
       "retirement must not return while accepted publication is still held")
     release.signal()
     try await publisher.value
     await retirement.value
-    XCTAssertEqual(order.withLock { $0 }, [1, 2])
+    XCTAssertEqual(progress.state.withLock { $0.order }, [1, 2])
   }
 
   func testDownstreamBackpressureDoesNotConsumeInputIdleDeadline() async throws {

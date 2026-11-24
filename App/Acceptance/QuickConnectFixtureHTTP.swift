@@ -50,8 +50,10 @@
           ]
         ]
       case ("GET", "Items"), ("GET", "Artists"), ("GET", "Artists/AlbumArtists"),
-        ("GET", "MusicGenres"):
+        ("GET", "Genres"):
         body = ["Items": [], "TotalRecordCount": 0]
+      case ("GET", "Items/Filters"):
+        body = ["Years": [Int]()]
       default:
         return HTTPReply(data: Data(), status: 404)
       }

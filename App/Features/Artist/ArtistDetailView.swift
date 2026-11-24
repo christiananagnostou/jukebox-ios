@@ -82,12 +82,10 @@ struct ArtistDetailView: View {
         .id(owner)
         .musicTextMotion(allowed: !showInformation)
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            MusicHeaderActions(
-              store: store, browser: model, context: owner,
-              isCurrent: { isCurrent() && model.scope == owner && model.metadataIsCurrent },
-              accountSheet: $accountSheet)
-          }.sharedBackgroundVisibility(.hidden)
+          MusicHeaderActions(
+            store: store, browser: model, context: owner,
+            isCurrent: { isCurrent() && model.scope == owner && model.metadataIsCurrent },
+            accountSheet: $accountSheet)
         }
       } else {
         ProgressView("Loading artist…")
@@ -260,12 +258,10 @@ struct ArtistCatalogView: View {
           search: { if model.scope == owner && model.metadataIsCurrent { search($0, $1, model) } }
         )
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            MusicHeaderActions(
-              store: store, browser: model, context: owner,
-              isCurrent: { model.scope == owner && model.metadataIsCurrent },
-              accountSheet: $accountSheet)
-          }.sharedBackgroundVisibility(.hidden)
+          MusicHeaderActions(
+            store: store, browser: model, context: owner,
+            isCurrent: { model.scope == owner && model.metadataIsCurrent },
+            accountSheet: $accountSheet)
         }
       } else {
         ProgressView("Loading music…")

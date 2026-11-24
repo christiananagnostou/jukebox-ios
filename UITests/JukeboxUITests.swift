@@ -3643,11 +3643,14 @@ final class JukeboxUITests: XCTestCase {
     app.launch()
     defer { app.terminate() }
     let tabs = app.tabBars.firstMatch
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     for title in ["Home", "Library", "Search"] {
       let tab = tabs.buttons[title]
       XCTAssertTrue(tab.waitForExistence(timeout: 8))
       tab.tap()
-      app.buttons["Accounts"].tap()
+      XCTAssertTrue(accounts.waitForExistence(timeout: 5))
+      XCTAssertTrue(accounts.isHittable)
+      accounts.tap()
       app.buttons["Connection details"].tap()
       let address = app.staticTexts["connection-server-address"]
       XCTAssertTrue(address.waitForExistence(timeout: 4))
@@ -3685,8 +3688,9 @@ final class JukeboxUITests: XCTestCase {
     start.tap()
     XCTAssertTrue(code.waitForExistence(timeout: 5))
     XCTAssertEqual(code.value as? String, "1 2 0 0 0 2")
-    let accounts = app.buttons["Accounts"]
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(accounts.waitForExistence(timeout: 22))
+    XCTAssertTrue(accounts.isHittable)
     accounts.tap()
     app.buttons["Quick Connect"].tap()
     let field = app.textFields["quick-connect-input"]

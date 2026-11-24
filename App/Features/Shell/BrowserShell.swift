@@ -286,6 +286,8 @@ struct BrowserShell: View {
   }
   @ToolbarContentBuilder private func controls() -> some ToolbarContent {
     let context = menuIdentity
+    let source = representedBrowser
+    let background: Visibility = tab == .dashboard ? .automatic : .hidden
     ToolbarItem(placement: .topBarLeading) {
       MusicMediaPicker(
         identity: context, isCurrent: { menuIdentity == context },
@@ -297,25 +299,20 @@ struct BrowserShell: View {
             .allowsHitTesting(false).accessibilityHidden(true)
         }
       }
-    }.sharedBackgroundVisibility(tab == .dashboard ? .automatic : .hidden)
-    ToolbarItem(placement: .topBarTrailing) {
-      if let source = representedBrowser {
-        HStack(spacing: 0) {
-          if tab == .dashboard, dashboardPath.isEmpty || sizeClass == .regular {
-            Button {
-              if menuIdentity == context { homeEditor = source.scope }
-            } label: {
-              MusicUtilityLabel(title: "Customize Home", symbol: "slider.horizontal.3")
-            }.buttonStyle(.plain).accessibilityLabel("Customize Home").accessibilityIdentifier(
-              "home-customize")
-          }
-          MusicHeaderActions(
-            store: store, browser: source, context: context,
-            isCurrent: { menuIdentity == context && representedBrowser === source },
-            accountSheet: $accountSheet)
-        }
-      }
-    }.sharedBackgroundVisibility(tab == .dashboard ? .automatic : .hidden)
+    }.sharedBackgroundVisibility(background)
+    if let source, tab == .dashboard, dashboardPath.isEmpty || sizeClass == .regular {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button {
+          if menuIdentity == context { homeEditor = source.scope }
+        } label: {
+          Label("Customize Home", systemImage: "slider.horizontal.3").labelStyle(.iconOnly)
+        }.accessibilityIdentifier("home-customize")
+      }.sharedBackgroundVisibility(background)
+    }
+    MusicHeaderActions(
+      store: store, browser: source, context: context,
+      isCurrent: { menuIdentity == context && representedBrowser === source },
+      accountSheet: $accountSheet, backgroundVisibility: background)
   }
   @ViewBuilder private func destination(_ route: BrowseRoute, canvas: CGRect) -> some View {
     let selectedTab = tab

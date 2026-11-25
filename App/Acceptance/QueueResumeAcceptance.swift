@@ -1,4 +1,5 @@
 #if DEBUG && LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+  import AVFoundation
   import Foundation
   import SwiftUI
 
@@ -31,6 +32,10 @@
           try checkTime()
           switch operation {
           case "prepare":
+            if let failure = try await calibrateMeter() {
+              result = failure
+              return
+            }
             try await prepare()
             result = "prepared"
           case "cleanup":
@@ -57,6 +62,39 @@
       try await TransportAcceptance.realMusicClient(isCurrent: {
         !Task.isCancelled && Date.now < deadline
       })
+    }
+    private func calibrateMeter() async throws -> String? {
+      guard
+        let tone = Bundle.main.url(
+          forResource: "tone", withExtension: "wav", subdirectory: "Fixtures")
+      else { throw ClientError.invalidResponse }
+      let item = AVPlayerItem(url: tone)
+      let meter = try await AudioClockTap.installForOnset(on: item)
+      let player = AVQueuePlayer()
+      player.isMuted = true
+      defer {
+        player.pause()
+        player.removeAllItems()
+        meter.invalidate()
+      }
+      player.insert(item, after: nil)
+      guard
+        await player.seek(
+          to: CMTime(seconds: 12, preferredTimescale: 600), toleranceBefore: .zero,
+          toleranceAfter: .zero)
+      else {
+        throw PlaybackProblem.seek
+      }
+      meter.armOnset()
+      player.play()
+      let end = ContinuousClock.now.advanced(by: .seconds(5))
+      while ContinuousClock.now < end {
+        try checkTime()
+        if meter.firstSignalUptime != nil, item.currentTime().seconds > 12.03 { return nil }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      return
+        "failed calibration buffers=\(meter.measuredBuffers) callbacks=\(meter.processCallbacks) format=\(meter.formatStatus) source=\(meter.sourceStatus)"
     }
     private func prepare() async throws {
       let files = FileManager.default
@@ -108,21 +146,23 @@
       try await storage.saveConnections([account])
       let vault = MemoryVault()
       await vault.write("fixture", account: account.id)
-      let start = ProcessInfo.processInfo.systemUptime
-      func ms() -> Int { Int(((ProcessInfo.processInfo.systemUptime - start) * 1000).rounded()) }
+      let start = DispatchTime.now().uptimeNanoseconds
+      func ms(_ instant: UInt64 = DispatchTime.now().uptimeNanoseconds) -> Int {
+        Int((instant - start) / 1_000_000)
+      }
       let service = try await client()
       let store = PlayerStore(
         storage: storage, vault: vault, driver: native, deviceID: "fixture",
         factory: { _, _ in service })
       var tap: AudioClockTap?
-      native.measureAudioItemBeforeInsertion = { item, prepared in
-        if prepared.entry.id == run { tap = try AudioClockTap.install(on: item) }
+      native.measureAudioItem = { item, prepared in
+        if prepared.entry.id == run { tap = try await AudioClockTap.installForOnset(on: item) }
       }
       defer {
         if let owner = store.transportAcceptanceLease() {
           _ = store.retireTransportAcceptance(owned: owner)
         }
-        native.measureAudioItemBeforeInsertion = nil
+        native.measureAudioItem = nil
         tap?.invalidate()
         native.stop()
       }
@@ -133,24 +173,18 @@
         store.hasRemainingQueue == (operation == "many")
       else { throw ClientError.invalidResponse }
       store.play()
-      var pcm: Int?
       var clock: Int?
       while ms() < 30_000 {
         try checkTime()
-        if pcm == nil,
-          tap?.drain().contains(where: { $0.level > 0.001 && $0.time >= 11.95 }) == true
-        {
-          pcm = ms()
-        }
         let readout = native.queueReadout
-        if clock == nil, store.playing, readout.occurrence == run, !readout.preparing,
-          !readout.seeking,
-          readout.absoluteSeconds > 12.03
+        if readout.occurrence == run, !readout.preparing, !readout.seeking,
+          readout.absoluteSeconds >= 11.95
         {
-          clock = ms()
+          tap?.armOnset()
+          if clock == nil, store.playing, readout.absoluteSeconds > 12.03 { clock = ms() }
         }
-        if let pcm, let clock {
-          return "ok \(ready) \(pcm) \(clock) \(ProcessInfo.processInfo.processIdentifier)"
+        if let onset = tap?.firstSignalUptime, let clock {
+          return "ok \(ready) \(ms(onset)) \(clock) \(ProcessInfo.processInfo.processIdentifier)"
         }
         if store.phase == .failed {
           throw store.lastPlaybackFailure?.detail
@@ -159,7 +193,7 @@
         try await Task.sleep(for: .milliseconds(10))
       }
       return
-        "failed onset decoded_ms=\(pcm ?? -1) clock_ms=\(clock ?? -1) callbacks=\(tap?.processCallbacks ?? 0) format=\(tap?.formatStatus ?? -1)"
+        "failed onset signal=\(tap?.firstSignalUptime != nil) clock_ms=\(clock ?? -1) buffers=\(tap?.measuredBuffers ?? 0) callbacks=\(tap?.processCallbacks ?? 0) format=\(tap?.formatStatus ?? -1) source=\(tap?.sourceStatus ?? -1)"
     }
     static func clean(run: UUID) throws {
       let files = FileManager.default

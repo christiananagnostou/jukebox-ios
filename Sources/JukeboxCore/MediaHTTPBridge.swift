@@ -72,10 +72,12 @@ struct MediaBridgeResponse: Sendable {
   let bodyLength: Int64?
   let chunked: Bool
   let noBody: Bool
+  let ignoresTwoByteProbe: Bool
   private(set) var lengthlessMP3 = false
   init(_ response: HTTPURLResponse, request: MediaBridgeRequest) throws {
     let status = response.statusCode
     self.status = status
+    ignoresTwoByteProbe = status == 200 && request.range == "bytes=0-1"
     guard (200...599).contains(status) else {
       throw Rejection(status: status, reason: .status)
     }
@@ -158,6 +160,7 @@ struct MediaBridgeResponse: Sendable {
 
 private struct MediaBridgeBody {
   struct ReadFailure: Error { let cause: URLError }
+  static let bulkFrameBytes = 16_384
   static let maximumReplayBytes: Int64 = 4 * 1024 * 1024
   var received: Int64 = 0
   var delivered: Int64 = 0
@@ -172,6 +175,7 @@ private struct MediaBridgeBody {
     var verification = SHA256()
     var iterator = bytes.makeAsyncIterator()
     var chunk = Data()
+    var frameBytes = plan.ignoresTwoByteProbe ? 2 : Self.bulkFrameBytes
     received = 0
     while true {
       let byte: UInt8?
@@ -182,7 +186,7 @@ private struct MediaBridgeBody {
         received += 1
         if let length = plan.bodyLength, received > length { throw ClientError.invalidResponse }
         chunk.append(byte)
-        if chunk.count < 16_384 { continue }
+        if chunk.count < frameBytes { continue }
       } else {
         guard received >= offset, plan.bodyLength == nil || received == plan.bodyLength else {
           throw ClientError.invalidResponse
@@ -210,6 +214,7 @@ private struct MediaBridgeBody {
           note(received, delivered, false)
         }
         chunk.removeAll(keepingCapacity: true)
+        frameBytes = Self.bulkFrameBytes
       }
       if byte == nil { return }
     }

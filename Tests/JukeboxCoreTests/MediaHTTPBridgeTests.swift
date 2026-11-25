@@ -1062,28 +1062,26 @@ private final class BridgeHeldSocket: Sendable {
     let bridge = MediaHTTPBridge(protocolClasses: [BridgeFixtureProtocol.self])
     try await bridge.start()
     let consumer = client()
+    var request = URLRequest(url: try bridge.register(source))
+    request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+    let download = Task { try await consumer.data(for: request) }
     defer {
+      download.cancel()
       BridgeFixtureProtocol.state.releaseHeldCompletion(owner)
       consumer.invalidateAndCancel()
       bridge.stop()
     }
-    var request = URLRequest(url: try bridge.register(source))
-    request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
-    let (bytes, info) = try await consumer.bytes(for: request)
+    try await wait {
+      guard BridgeFixtureProtocol.state.hasHeldCompletion(owner) else { return false }
+      let tasks = await consumer.allTasks
+      return tasks.count == 1 && tasks[0].countOfBytesReceived == 2
+    }
+    XCTAssertFalse(BridgeFixtureProtocol.state.ended)
+    BridgeFixtureProtocol.state.releaseHeldCompletion(owner)
+    let (received, info) = try await download.value
     let response = try XCTUnwrap(info as? HTTPURLResponse)
     XCTAssertEqual(response.statusCode, 200)
     XCTAssertNil(response.value(forHTTPHeaderField: "Content-Range"))
-    var iterator = bytes.makeAsyncIterator()
-    var received = Data()
-    for _ in 0..<2 {
-      let byte = try await iterator.next()
-      received.append(try XCTUnwrap(byte))
-    }
-    XCTAssertEqual(received, expected.prefix(2))
-    try await wait { BridgeFixtureProtocol.state.hasHeldCompletion(owner) }
-    XCTAssertFalse(BridgeFixtureProtocol.state.ended)
-    BridgeFixtureProtocol.state.releaseHeldCompletion(owner)
-    while let byte = try await iterator.next() { received.append(byte) }
     XCTAssertEqual(received, expected)
     XCTAssertEqual(BridgeFixtureProtocol.state.count, 1)
   }

@@ -120,8 +120,9 @@ final class APITests: XCTestCase {
       XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "PlaybackInfo" }.count, 1)
     }
   }
+  @MainActor
   func testPausedValidationRetainsAllRootGlobalPoolAndBatchBounds() async throws {
-    let ids = (0..<85).map { "restore-\($0)" }
+    let ids = (0..<205).map { "restore-\($0)" }
     let roots = HTTPReply(
       data: Data(
         #"{"Items":[{"CollectionType":"music","Type":"CollectionFolder","Id":"r1","Name":"First"},{"CollectionType":"music","Type":"CollectionFolder","Id":"r2","Name":"Second"}]}"#
@@ -155,14 +156,24 @@ final class APITests: XCTestCase {
       connection: Connection(
         server: ServerAddress("https://fixture.test"), userID: "listener", username: "Invented"),
       token: "invented-token", deviceID: "test", transport: http)
-    let allowed = try await client.validate(ids: ids + [ids[0], ids[0], ids[84]])
+    await http.holdNext("Items")
+    let validation = Task { try await client.validate(ids: ids + [ids[0], ids[0], ids[204]]) }
+    try await StoreTests().wait {
+      await http.requests.filter { $0.url?.lastPathComponent == "Items" }.count >= 4
+    }
+    let firstWindow = await http.requests.filter { $0.url?.lastPathComponent == "Items" }
+    XCTAssertEqual(firstWindow.count, 4)
+    await http.release()
+    let allowed = try await validation.value
     XCTAssertEqual(Set(allowed.map(\.id)), Set(ids))
-    XCTAssertEqual(allowed.count, 85)
+    XCTAssertEqual(allowed.count, ids.count)
     XCTAssertFalse(allowed.contains { $0.id == "not-requested" })
     let requests = await http.requests
     let proofs = requests.filter { $0.url?.lastPathComponent == "Items" }
-    XCTAssertEqual(proofs.count, 6, "Paused restore still checks every accepted Music root")
-    var firstBatch: [String] = []
+    let expected = stride(from: 0, to: ids.count, by: 40).map {
+      Array(ids[$0..<min($0 + 40, ids.count)])
+    }
+    XCTAssertEqual(proofs.count, expected.count * 2)
     for root in ["r1", "r2"] {
       let batches = proofs.compactMap { request -> [String]? in
         let query =
@@ -171,16 +182,35 @@ final class APITests: XCTestCase {
         return (query.first(where: { $0.name == "Ids" })?.value ?? "").split(separator: ",").map(
           String.init)
       }
-      XCTAssertEqual(batches.map(\.count), [40, 40, 5])
-      XCTAssertEqual(Set(batches.flatMap { $0 }), Set(ids))
-      XCTAssertEqual(batches.flatMap { $0 }.count, 85)
-      if root == "r1" { firstBatch = try XCTUnwrap(batches.first) }
+      XCTAssertEqual(batches.count, expected.count)
+      XCTAssertEqual(Set(batches), Set(expected))
     }
-    let outsideFirstBatch = try XCTUnwrap(ids.first(where: { !firstBatch.contains($0) }))
+    let outsideFirstBatch = ids[40]
     XCTAssertEqual(
       allowed.first(where: { $0.id == outsideFirstBatch })?.title, "Outside " + outsideFirstBatch,
       "Globally requested IDs returned outside this batch remain allowed; first root wins")
     XCTAssertFalse(requests.contains { $0.url?.lastPathComponent == "PlaybackInfo" })
+  }
+  @MainActor
+  func testPausedValidationDiscardsHeldCatalogAfterMusicAccessChanges() async throws {
+    let http = ScriptedHTTP(
+      [(200, ["Items": [["Id": "song", "Name": "Fixture", "Type": "Audio"]]])],
+      musicRoot: true)
+    let client = try JellyfinClient(
+      connection: Connection(
+        server: ServerAddress("https://fixture.test"), userID: "listener", username: "Invented"),
+      token: "invented-token", deviceID: "test", transport: http)
+    await http.holdNext("Items")
+    let validation = Task { try await client.validate(ids: ["song"]) }
+    try await waitForMediaHold(http)
+    await http.replaceRoots(HTTPReply(data: Data(#"{"Items":[]}"#.utf8), status: 200))
+    let refreshed = try await client.musicLibraries(refresh: true)
+    XCTAssertTrue(refreshed.isEmpty)
+    await http.release()
+    do {
+      _ = try await validation.value
+      XCTFail("A retired Music root supplied the restored queue")
+    } catch is CancellationError {}
   }
   @MainActor private func waitForMediaHold(_ http: ScriptedHTTP) async throws {
     try await StoreTests().wait { await http.waiting }

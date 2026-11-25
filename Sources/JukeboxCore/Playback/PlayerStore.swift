@@ -60,6 +60,10 @@ import Observation
       self.saved = saved
       verified = ready.entries.map(\.track)
     }
+    var remainingIDs: [String] {
+      let known = Set(verified.map(\.id))
+      return saved.entries.compactMap { known.contains($0.track.id) ? nil : $0.track.id }
+    }
     func checkpoint(_ ready: QueueState) -> QueueState {
       var result = saved
       let index = ready.current.flatMap { entry in
@@ -602,13 +606,9 @@ import Observation
     guard let pending = restoringQueue, pending.task == nil, let service else { return }
     queueRestoreFailed = false
     pending.task = Task(priority: .utility) { [weak self, weak pending] in
-      guard let pending else { return }
       do {
         try Task.checkCancellation()
-        let known = Set(pending.verified.map(\.id))
-        let remaining = pending.saved.entries.compactMap {
-          known.contains($0.track.id) ? nil : $0.track.id
-        }
+        guard let remaining = pending?.remainingIDs else { return }
         let items: [MusicItem]
         do {
           items = try await service.validate(ids: remaining)
@@ -617,7 +617,7 @@ import Observation
           items = try await service.validate(ids: remaining)
         }
         try Task.checkCancellation()
-        guard let self, self.restoringQueue === pending else { return }
+        guard let self, let pending, self.restoringQueue === pending else { return }
         var complete = pending.checkpoint(self.queue)
         complete.reconcile(pending.verified + items)
         self.restoringQueue = nil
@@ -626,7 +626,9 @@ import Observation
         let generation = self.epoch
         for action in pending.actions where self.epoch == generation { action(self) }
       } catch {
-        guard let self, self.restoringQueue === pending, !Task.isCancelled else { return }
+        guard let self, let pending, self.restoringQueue === pending, !Task.isCancelled else {
+          return
+        }
         pending.task = nil
         self.queueRestoreFailed = true
         if error as? ClientError == .unauthorized { await self.logout(ifCurrent: self.epoch) }

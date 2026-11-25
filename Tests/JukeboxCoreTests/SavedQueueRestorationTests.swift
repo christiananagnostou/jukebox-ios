@@ -148,14 +148,15 @@ extension StoreTests {
     let catalog = RestoringCatalog(saved.entries, excluding: [deleted.track.id], block: true)
     let (store, driver, storage, account) = try await restoredStore(saved, catalog: catalog)
     try await wait { await catalog.isWaiting }
+    let removed = saved.entries[saved.index + 1].id
+    store.remove([removed])
     await catalog.release(.unavailable)
     try await wait { store.queueRestoreFailed }
     XCTAssertEqual(store.current?.id, saved.current?.id)
     try await store.saveNow()
     let persisted = try await storage.restore(account: account.id)
     XCTAssertEqual(persisted, saved)
-    let removed = saved.entries[saved.index + 1].id
-    store.remove([removed])
+    store.retryQueueRestoration()
     try await wait { !store.hasRemainingQueue }
     XCTAssertEqual(
       store.queue.entries, saved.entries.filter { $0.id != removed && $0.id != deleted.id })

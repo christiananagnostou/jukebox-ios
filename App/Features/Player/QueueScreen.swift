@@ -21,7 +21,7 @@ struct QueueScreen: View {
         }
       }
 
-      if store.queue.entries.isEmpty {
+      if store.queue.entries.isEmpty && !store.hasRemainingQueue {
         MusicEmptyState(
           title: "The queue is open", systemImage: "list.bullet",
           message: "Play an album or add a track to begin.")

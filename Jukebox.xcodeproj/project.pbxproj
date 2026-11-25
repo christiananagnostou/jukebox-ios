@@ -5,6 +5,8 @@
 	};
 	objectVersion = 56;
 	objects = {
+2DD33F5788E547C692007438 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Acceptance/QueueResumeAcceptance.swift"; sourceTree = "<group>"; };
+AB544959CD1235ACD0CCC1E6 = { isa = PBXBuildFile; fileRef = 2DD33F5788E547C692007438; };
 06DFC44C9F21E39F19B39296 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Features/Connection/SignInPage.swift"; sourceTree = "<group>"; };
 22A8FCF139744B583C83DF22 = { isa = PBXBuildFile; fileRef = 06DFC44C9F21E39F19B39296; };
 19937FEC85BE9BD1E8A4DAD3 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Sources/JukeboxCore/Connection/JellyfinAuthentication.swift"; sourceTree = "<group>"; };
@@ -228,6 +230,7 @@ CD563B61596CB519C19361B7 = { isa = PBXFileReference; lastKnownFileType = sourcec
 		AD936FCBED631FA67E05C3EA = {
 			isa = PBXGroup;
 			children = (
+				2DD33F5788E547C692007438,
 				06DFC44C9F21E39F19B39296,
 				19937FEC85BE9BD1E8A4DAD3,
 				F629600C57FF6E7E2A4CC027,
@@ -409,6 +412,7 @@ CD563B61596CB519C19361B7 = { isa = PBXFileReference; lastKnownFileType = sourcec
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB544959CD1235ACD0CCC1E6,
 				22A8FCF139744B583C83DF22,
 				EC8E31007F30464DDD4DDF83,
 				F2F1D23DE3F8F78CFEB83FC4,

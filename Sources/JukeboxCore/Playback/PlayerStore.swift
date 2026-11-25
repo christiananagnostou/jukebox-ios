@@ -50,6 +50,38 @@ import Observation
   }
   private(set) var playerContentRevision = UUID()
   private var queueMembership = QueueMembership(QueueState(), account: nil)
+  @MainActor private final class QueueRestoration {
+    var saved: QueueState
+    let verified: [MusicItem]
+    var task: Task<Void, Never>?
+    var actions: [(PlayerStore) -> Void] = []
+    private var membership: (UUID, QueueMembership)?
+    init(_ saved: QueueState, ready: QueueState) {
+      self.saved = saved
+      verified = ready.entries.map(\.track)
+    }
+    func checkpoint(_ ready: QueueState) -> QueueState {
+      var result = saved
+      let index = ready.current.flatMap { entry in
+        saved.entries.firstIndex { $0.id == entry.id }
+      }
+      result.index = index ?? 0
+      result.position = index == nil ? 0 : ready.position
+      result.quality = ready.quality
+      return result
+    }
+    func matches(_ selection: PlaybackSelection, account: UUID) -> Bool {
+      guard selection.items.count == saved.entries.count else { return false }
+      if membership?.0 != saved.membershipRevision {
+        membership = (saved.membershipRevision, QueueMembership(saved, account: account))
+      }
+      return membership?.1.matches(selection, shuffled: false) == true
+    }
+  }
+  private var restoringQueue: QueueRestoration?
+  var hasRemainingQueue: Bool { restoringQueue != nil }
+  private(set) var queueRestoreFailed = false
+  private var queueCheckpoint: QueueState { restoringQueue?.checkpoint(queue) ?? queue }
   private var successorPreparation: SuccessorPreparation?
   var nextRequiresRetry: Bool {
     guard let successorPreparation, case .failed = successorPreparation.phase else { return false }
@@ -288,6 +320,7 @@ import Observation
     return request
   }
   private func retire() {
+    cancelQueueRestoration()
     cancelSleepTimer()
     repeatMode = .off
     shuffleEnabled = false
@@ -457,10 +490,8 @@ import Observation
         playID == intent, saveRevision == revision
       else { return }
       step = .restoration
-      var restored = try await storage.restore(account: connection.id) ?? QueueState()
-      if !restored.entries.isEmpty {
-        restored.reconcile(try await api.validate(ids: restored.entries.map { $0.track.id }))
-      }
+      let savedQueue = try await storage.restore(account: connection.id) ?? QueueState()
+      let restored = try await savedQueue.restoredForPlayback(using: api)
       let preferences =
         (try? await storage.catalogPreferences(account: connection.id))
         ?? CatalogBrowsePreferences()
@@ -481,7 +512,7 @@ import Observation
       active = connection
       storageLease = lease
       installBrowser(api, account: connection.id, preferences: preferences)
-      queue = restored
+      installRestoredQueue(restored)
       connections = saved
       #if DEBUG
         Self.transportActivationReceipt?.accept(
@@ -536,8 +567,8 @@ import Observation
       let connection = Connection(
         server: try ServerAddress("https://fixture.invalid"), userID: "invented-listener",
         username: "Demo listener")
-      var restored = try await storage.restore(account: connection.id) ?? QueueState()
-      restored.reconcile(try await service.validate(ids: restored.entries.map { $0.track.id }))
+      let savedQueue = try await storage.restore(account: connection.id) ?? QueueState()
+      let restored = try await savedQueue.restoredForPlayback(using: service)
       guard generation == epoch else { return }
       await restoreCatalogDevicePreferences()
       let preferences =
@@ -549,12 +580,64 @@ import Observation
       self.service = service
       storageLease = lease
       installBrowser(service, account: connection.id, preferences: preferences)
-      queue = restored
+      installRestoredQueue(restored)
       busy = false
     } catch {
       busy = false
       self.error = message(error)
     }
+  }
+  private func installRestoredQueue(_ result: (ready: QueueState, remainder: QueueState?)) {
+    queue = result.ready
+    guard let remainder = result.remainder else { return }
+    restoringQueue = QueueRestoration(remainder, ready: result.ready)
+    retryQueueRestoration()
+  }
+  private func cancelQueueRestoration() {
+    restoringQueue?.task?.cancel()
+    restoringQueue = nil
+    queueRestoreFailed = false
+  }
+  func retryQueueRestoration() {
+    guard let pending = restoringQueue, pending.task == nil, let service else { return }
+    queueRestoreFailed = false
+    pending.task = Task(priority: .utility) { [weak self, weak pending] in
+      guard let pending else { return }
+      do {
+        try Task.checkCancellation()
+        let known = Set(pending.verified.map(\.id))
+        let remaining = pending.saved.entries.compactMap {
+          known.contains($0.track.id) ? nil : $0.track.id
+        }
+        let items: [MusicItem]
+        do {
+          items = try await service.validate(ids: remaining)
+        } catch is CancellationError {
+          try Task.checkCancellation()
+          items = try await service.validate(ids: remaining)
+        }
+        try Task.checkCancellation()
+        guard let self, self.restoringQueue === pending else { return }
+        var complete = pending.checkpoint(self.queue)
+        complete.reconcile(pending.verified + items)
+        self.restoringQueue = nil
+        self.queue = complete
+        self.prepareNext()
+        let generation = self.epoch
+        for action in pending.actions where self.epoch == generation { action(self) }
+      } catch {
+        guard let self, self.restoringQueue === pending, !Task.isCancelled else { return }
+        pending.task = nil
+        self.queueRestoreFailed = true
+        if error as? ClientError == .unauthorized { await self.logout(ifCurrent: self.epoch) }
+      }
+    }
+  }
+  private func afterQueueRestoration(_ action: @escaping (PlayerStore) -> Void) -> Bool {
+    guard let pending = restoringQueue else { return false }
+    pending.actions.append(action)
+    retryQueueRestoration()
+    return true
   }
   private func installBrowser(
     _ service: any MusicCatalogServing, account: String? = nil,
@@ -635,6 +718,15 @@ import Observation
     browser = model
   }
   private func retireUnavailablePlayback(removedLibraries: Set<String>) {
+    if let pending = restoringQueue {
+      let ids = pending.saved.entries.compactMap { entry in
+        entry.libraryID.map(removedLibraries.contains) == true ? entry.id : nil
+      }
+      if !ids.isEmpty {
+        pending.saved.remove(Set(ids))
+        persist()
+      }
+    }
     let removed = Set(
       queue.entries.filter { entry in
         entry.libraryID.map(removedLibraries.contains) == true
@@ -829,6 +921,9 @@ import Observation
   }
   func selectionIsCurrent(_ selection: PlaybackSelection) -> Bool {
     guard accepts(selection) else { return false }
+    if let pending = restoringQueue {
+      return pending.matches(selection, account: epoch)
+    }
     return queueMembership.matches(
       selection, shuffled: selection.playlist?.id != nil && shuffleEnabled)
   }
@@ -876,6 +971,7 @@ import Observation
     guard accepts(selection), !selection.items.isEmpty,
       selection.items.allSatisfy({ $0.kind == "Audio" })
     else { return }
+    if afterQueueRestoration({ $0.enqueueSelection(selection, next: next) }) { return }
     guard
       retainCurrentBeforeFutureEdit(keeping: {
         next ? nil : queue.lookahead(repeating: repeatMode)?.id
@@ -906,6 +1002,7 @@ import Observation
     return retired
   }
   func toggleShuffle() {
+    if afterQueueRestoration({ $0.toggleShuffle() }) { return }
     var reordered: [QueueEntry] = []
     guard active != nil,
       retainCurrentBeforeFutureEdit(keeping: {
@@ -1126,7 +1223,8 @@ import Observation
   func saveNow() async throws {
     guard let active, let lease = storageLease else { return }
     saveRevision += 1
-    try await storage.saveIfCurrent(queue, account: active.id, lease: lease, revision: saveRevision)
+    try await storage.saveIfCurrent(
+      queueCheckpoint, account: active.id, lease: lease, revision: saveRevision)
   }
   private func observedPreparationTask(
     _ work: @escaping @MainActor @Sendable () async -> Void
@@ -1274,6 +1372,7 @@ import Observation
         self.persist()
         if error as? ClientError == .unauthorized { await self.logout(ifCurrent: self.epoch) }
         if error as? ClientError == .forbidden {
+          self.restoringQueue?.saved.remove([current.id])
           self.queue.remove([current.id])
           self.stopDriver()
           self.persist()
@@ -1332,6 +1431,7 @@ import Observation
     replaceQueueTarget(at: index)
   }
   func next() {
+    if queue.successor == nil && deferRestoredNavigation(forward: true) { return }
     guard let index = queue.nextIndex(repeating: repeatMode) else {
       pause()
       return
@@ -1390,6 +1490,7 @@ import Observation
     replacementQueue.index = index
     replacementQueue.position = 0
     if let canonicalOrder {
+      cancelQueueRestoration()
       canonicalQueueOrder = canonicalOrder
       replacementQueue.playlistID = playlistID
     }
@@ -1403,8 +1504,21 @@ import Observation
       seek(0)
     } else if queue.index > 0 {
       select(queue.entries[queue.index - 1].id)
+    } else if deferRestoredNavigation(forward: false) {
+      return
     } else if repeatMode == .all, let last = queue.entries.last {
       select(last.id)
+    }
+  }
+  private func deferRestoredNavigation(forward: Bool) -> Bool {
+    guard let pending = restoringQueue, let occurrence = current?.id,
+      let index = pending.saved.entries.firstIndex(where: { $0.id == occurrence }),
+      repeatMode == .all || (forward ? index + 1 < pending.saved.entries.count : index > 0)
+    else { return false }
+    let request = playID
+    return afterQueueRestoration { store in
+      guard store.playID == request, store.current?.id == occurrence else { return }
+      if forward { store.next() } else { store.previous() }
     }
   }
   func seek(_ seconds: Double, occurrence: UUID? = nil) {
@@ -1490,11 +1604,31 @@ import Observation
   }
   func remove(_ ids: Set<UUID>) {
     guard !ids.isEmpty else { return }
+    if afterQueueRestoration({ $0.remove(ids) }) { return }
     editQueue(
       { $0.remove(ids) }, commitOrder: { canonicalQueueOrder.removeAll { ids.contains($0) } })
   }
   func move(from: Int, to: Int) {
     guard queue.entries.indices.contains(from), to >= 0, to <= queue.entries.count else { return }
+    if let pending = restoringQueue {
+      let moved = queue.entries[from].id
+      let before =
+        queue.entries.indices.contains(to)
+        ? queue.entries[to].id
+        : queue.entries.last.flatMap { last in
+          guard let index = pending.saved.entries.firstIndex(where: { $0.id == last.id }),
+            pending.saved.entries.indices.contains(index + 1)
+          else { return nil }
+          return pending.saved.entries[index + 1].id
+        }
+      _ = afterQueueRestoration { store in
+        let entries = store.queue.entries
+        guard let from = entries.firstIndex(where: { $0.id == moved }) else { return }
+        let to = before.flatMap { id in entries.firstIndex { $0.id == id } } ?? entries.count
+        store.move(from: from, to: to)
+      }
+      return
+    }
     editQueue(
       { $0.move(from: from, to: to) },
       commitOrder: {
@@ -1633,8 +1767,9 @@ import Observation
   }
   private func finishCurrent() {
     let listening = playbackIntentID
+    let advance = playbackRequested && preparation.pendingAlbum == nil
     let completion =
-      playbackRequested && preparation.pendingAlbum == nil
+      advance
       ? queue.completion(repeating: repeatMode, failedSuccessor: nextRequiresRetry) : .stop
     playbackDiagnostic?.event(.playback, .init(.native, .ended))
     playbackDiagnostic?.retire(.sourceRetired)
@@ -1649,6 +1784,12 @@ import Observation
     }
     retireSuccessor(.sourceRetired)
     queue.position = 0
+    if advance, repeatMode != .one, queue.successor == nil,
+      deferRestoredNavigation(forward: true)
+    {
+      persist()
+      return
+    }
     switch completion {
     case .stop: break
     case .awaitRetry(let index):
@@ -1779,7 +1920,7 @@ import Observation
   func persist() {
     guard let active, let lease = storageLease else { return }
     saveRevision += 1
-    let snapshot = queue
+    let snapshot = queueCheckpoint
     let storage = storage
     let revision = saveRevision
     Task {

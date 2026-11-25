@@ -111,6 +111,35 @@ struct QueueState: Codable, Equatable, Sendable {
     position = current?.id == currentID ? oldPosition : 0
     normalize()
   }
+  func restoredForPlayback(using service: any MusicCatalogServing) async throws
+    -> (ready: Self, remainder: Self?)
+  {
+    guard let current else { return (self, nil) }
+    let count = min(40, entries.count)
+    let start = min(max(0, index - 1), entries.count - count)
+    let window = entries[start..<(start + count)]
+    let requested = Set(window.map(\.track.id))
+    let verified = try await service.validate(ids: window.map(\.track.id))
+    try Task.checkCancellation()
+    var saved = self
+    if entries.count == count || entries.allSatisfy({ requested.contains($0.track.id) }) {
+      saved.reconcile(verified)
+      return (saved, nil)
+    }
+    guard verified.contains(where: { $0.id == current.track.id }) else {
+      saved.reconcile(try await service.validate(ids: entries.map(\.track.id)))
+      return (saved, nil)
+    }
+    var ready = self
+    ready.entries = Array(window)
+    ready.index -= start
+    ready.reconcile(verified)
+    let denied = requested.subtracting(verified.map(\.id))
+    if !denied.isEmpty {
+      saved.remove(Set(entries.lazy.filter { denied.contains($0.track.id) }.map(\.id)))
+    }
+    return (ready, saved)
+  }
   mutating func remove(_ ids: Set<UUID>) {
     let removingCurrent = current.map { ids.contains($0.id) } ?? true
     let survivingBeforeCurrent = entries.prefix(max(0, index)).count { !ids.contains($0.id) }

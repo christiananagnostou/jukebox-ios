@@ -3,6 +3,57 @@ import Vision
 import XCTest
 
 final class JukeboxUITests: XCTestCase {
+  #if DEBUG && LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+    @MainActor func testColdSavedQueueResumeMeasurements() throws {
+      executionTimeAllowance = 1200
+      let env = ProcessInfo.processInfo.environment
+      let run = try XCTUnwrap(env["JUKEBOX_QUEUE_RUN"].flatMap(UUID.init(uuidString:)))
+      let deadline = try XCTUnwrap(env["JUKEBOX_QUEUE_DEADLINE"].flatMap(Double.init))
+      let app = XCUIApplication()
+      app.launchArguments = ["--fixture", "--muted", "--transport-ui=" + run.uuidString]
+      app.launchEnvironment["JUKEBOX_QUEUE_DEADLINE"] = String(deadline)
+      func invoke(_ step: String, timeout: TimeInterval) throws -> String {
+        guard deadline - Date.now.timeIntervalSince1970 > timeout + 8 else {
+          throw URLError(.timedOut)
+        }
+        app.launchEnvironment["JUKEBOX_QUEUE_SAMPLE"] = run.uuidString + ":" + step
+        app.launch()
+        defer { app.terminate() }
+        let result = app.staticTexts["queue-resume-result"].firstMatch
+        guard result.waitForExistence(timeout: timeout) else { throw URLError(.timedOut) }
+        return result.label
+      }
+      defer {
+        XCTAssertEqual(try? invoke("cleanup", timeout: 10), "clean", "Queue sample cleanup failed")
+      }
+      let preparation = try invoke("prepare", timeout: 120)
+      guard preparation == "prepared" else {
+        XCTFail(preparation)
+        return
+      }
+      var processes = Set<Int>()
+      for pair in 0..<30 {
+        let order = pair.isMultiple(of: 2) ? ["one", "many"] : ["many", "one"]
+        for size in order {
+          let response = try invoke(size, timeout: 40)
+          let columns = response.split(separator: " ")
+          guard columns.count == 5, columns.first == "ok",
+            let ready = Int(columns[1]), let decoded = Int(columns[2]), let clock = Int(columns[3]),
+            let pid = Int(columns[4]), processes.insert(pid).inserted, ready > 0, ready <= decoded,
+            ready <= clock
+          else {
+            XCTFail("Queue sample \(pair) \(size) returned \(response)")
+            return
+          }
+          XCTContext.runActivity(
+            named:
+              "QueueResume pair=\(pair) size=\(size) ready_ms=\(ready) decoded_ms=\(decoded) clock_ms=\(clock) pid=\(pid)"
+          ) { _ in }
+        }
+      }
+      XCTAssertEqual(processes.count, 60)
+    }
+  #endif
   @MainActor private func capture(
     _ name: String, app: XCUIApplication, screen: Bool = false
   ) {

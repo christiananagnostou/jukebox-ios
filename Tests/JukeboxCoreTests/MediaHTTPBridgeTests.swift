@@ -466,7 +466,8 @@ private final class BridgeFixtureProtocol: URLProtocol, @unchecked Sendable {
               self.output.distance(from: $0.upperBound, to: self.output.endIndex) >= count
             } ?? false
           } ?? false
-        if end || error != nil || hasPrefix || self.output.count >= 16_384 {
+        let limit = 16_384 + (self.stopAfterBodyBytes ?? 0)
+        if end || error != nil || hasPrefix || self.output.count >= limit {
           self.finish()
         } else {
           self.read()
@@ -1944,6 +1945,40 @@ private final class BridgeHeldSocket: Sendable {
         XCTAssertEqual(evidence.state, .completed)
         XCTAssertEqual(evidence.recovery, .resumed)
         XCTAssertEqual(evidence.delivered, Int64(data.count))
+      }
+    }
+  }
+  func testPeerCloseAtContentLengthPreservesTheUpstreamResult() async throws {
+    let upstream = URL(string: "http://fixture.invalid/audio/held-end")!
+    let delivered = 65_536
+    for length in [delivered * 2, delivered] {
+      let data = Data(repeating: 42, count: length)
+      BridgeFixtureProtocol.state.reset(
+        .init(url: upstream, data: data, mime: "audio/mpeg", ranged: true, mode: .prefixFailure))
+      let bridge = MediaHTTPBridge(protocolClasses: [BridgeFixtureProtocol.self], idleTimeout: 0.5)
+      try await bridge.start()
+      defer { bridge.stop() }
+      let recorder = DiagnosticRecorder()
+      let context = try XCTUnwrap(DiagnosticSession(sink: recorder.append).begin(.play))
+      let url = try bridge.register(
+        MediaSource(url: upstream, quality: .original), diagnostic: context)
+      let port = try XCTUnwrap(bridge.port)
+      let wire = await BridgeRawClient(port: port).run(
+        "GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n", stopAfterBodyBytes: delivered
+      )
+      let headers = try XCTUnwrap(wire.range(of: Data("\r\n\r\n".utf8)))
+      XCTAssertEqual(wire[headers.upperBound...], data.prefix(delivered))
+      try await wait { await bridge.activeCount == 0 }
+      let transfer = try XCTUnwrap(bridge.evidence(for: url, at: 0).last)
+      if length == delivered {
+        XCTAssertEqual(transfer.state, .failed)
+        XCTAssertEqual(
+          transfer.code, DiagnosticCode(domain: .url, value: URLError.timedOut.rawValue))
+        XCTAssertEqual(transfer.inputTimedOut, true)
+        XCTAssertEqual(transfer.delivered, Int64(delivered))
+      } else {
+        XCTAssertEqual(transfer.state, .cancelled)
+        XCTAssertEqual(transfer.inputTimedOut, false)
       }
     }
   }

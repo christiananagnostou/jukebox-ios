@@ -165,7 +165,7 @@ private struct MediaBridgeBody {
 
   mutating func forward(
     _ bytes: URLSession.AsyncBytes, plan: MediaBridgeResponse, replaying: Bool,
-    note: (Int64, Int64, Bool) -> Void, deliver: (Data) async throws -> Void
+    deliver: (Data, Bool) async throws -> Void, note: (Int64, Int64, Bool) -> Void
   ) async throws {
     let offset = replaying ? delivered : 0
     let expected = replaying ? prefix?.finalize() : nil
@@ -200,7 +200,7 @@ private struct MediaBridgeBody {
           }
         } else {
           note(received, delivered, false)
-          try await deliver(plan.frame(chunk))
+          try await deliver(plan.frame(chunk), plan.bodyLength == received)
           delivered = received
           if !replaying && delivered <= Self.maximumReplayBytes {
             prefix?.update(data: chunk)
@@ -314,6 +314,7 @@ actor MediaHTTPBridge {
     var token: String?
     var task: Task<Void, Never>?
     var deadline: Task<Void, Never>?
+    var finalWriteStarted = false
     init(_ connection: NWConnection) { self.connection = connection }
   }
   private let session: URLSession
@@ -575,9 +576,9 @@ actor MediaHTTPBridge {
       }
       readHeader(id)
     } else if case .failed = state {
-      close(id)
+      peerDisconnected(id)
     } else if case .cancelled = state {
-      close(id)
+      peerDisconnected(id)
     }
   }
   private func readHeader(_ id: UUID) {
@@ -625,8 +626,17 @@ actor MediaHTTPBridge {
     }
   }
   private func receivedExtra(_ id: UUID, hasData: Bool, ended: Bool, error: NWError?) {
-    guard jobs[id] != nil else { return }
-    if error != nil || ended || hasData { close(id) } else { monitorDisconnect(id) }
+    if hasData {
+      close(id)
+    } else if ended || error != nil {
+      peerDisconnected(id)
+    } else {
+      monitorDisconnect(id)
+    }
+  }
+  private func peerDisconnected(_ id: UUID) {
+    guard jobs[id]?.finalWriteStarted == false else { return }
+    close(id)
   }
   private func live(_ id: UUID) -> Bool {
     guard !stopped, let job = jobs[id], let token = job.token else { return false }
@@ -658,11 +668,11 @@ actor MediaHTTPBridge {
             timer.cancel()
             read.finish()
           }
-          let deliver: @Sendable (Data) async throws -> Void = { [weak self] data in
+          let deliver: @Sendable (Data, Bool) async throws -> Void = { [weak self] data, isFinal in
             guard let self else { throw CancellationError() }
             read.setReading(false)
             defer { read.setReading(true) }
-            try await self.send(data, id: id)
+            try await self.send(data, id: id, isFinal: isFinal)
           }
           let (bytes, response) = try await session.bytes(for: transportRequest, delegate: read)
           defer { bytes.task.cancel() }
@@ -680,7 +690,7 @@ actor MediaHTTPBridge {
                 id, context: source.diagnostic, status: plan.status, bytes: 0,
                 error: PlaybackProblem.httpStatus(plan.status))
             }
-            try await deliver(plan.header)
+            try await deliver(plan.header, plan.noBody || plan.bodyLength == 0)
             if source.progressiveTranscode, plan.lengthlessMP3, !plan.noBody,
               request.range == nil || request.range == "bytes=0-"
             {
@@ -692,13 +702,11 @@ actor MediaHTTPBridge {
           }
           if !plan.noBody {
             do {
-              try await body.forward(bytes, plan: plan, replaying: attempt == 1) {
+              try await body.forward(bytes, plan: plan, replaying: attempt == 1, deliver: deliver) {
                 [weak self] received, delivered, verified in
                 self?.noteTransfer(
                   id, token: token, received: received, delivered: delivered,
                   recovery: verified ? .resumed : nil)
-              } deliver: {
-                try await deliver($0)
               }
             } catch let failure as MediaBridgeBody.ReadFailure {
               guard !read.finish(), attempt == 0, failure.cause.code == .networkConnectionLost,
@@ -709,7 +717,7 @@ actor MediaHTTPBridge {
               continue
             }
             if read.finish() { throw URLError(.timedOut) }
-            if plan.chunked { try await deliver(Data("0\r\n\r\n".utf8)) }
+            if plan.chunked { try await deliver(Data("0\r\n\r\n".utf8), true) }
           }
           self?.noteTransfer(
             id, token: token, received: body.received, delivered: body.delivered,
@@ -772,8 +780,9 @@ actor MediaHTTPBridge {
       return try MediaBridgeResponse(response, request: request)
     }
   }
-  private func send(_ data: Data, id: UUID) async throws {
+  private func send(_ data: Data, id: UUID, isFinal: Bool) async throws {
     guard live(id), let job = jobs[id] else { throw CancellationError() }
+    if isFinal { job.finalWriteStarted = true }
     maximumChunk = max(maximumChunk, data.count)
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       do {

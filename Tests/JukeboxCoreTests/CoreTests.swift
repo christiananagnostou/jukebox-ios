@@ -358,12 +358,13 @@ final class CoreTests: XCTestCase {
 
   func testStableNumericVersionFamilies() {
     let families = ServerCompatibility.verifiedFamilies
-    XCTAssertEqual(families, ["12.1", "12.2"])
-    for version in ["12.1", "12.1.0", "12.2", "12.2.5"] {
+    XCTAssertEqual(families, ["12.1", "12.2", "12.4"])
+    for version in ["12.1", "12.1.0", "12.2", "12.2.5", "12.4", "12.4.0", "12.4.12"] {
       XCTAssertTrue(ServerCompatibility.accepts(version, families: families))
     }
     for version in [
-      "12.0.9", "12.10", "12.20.0", "13.0", "12.2.0-beta", "12.2.", "12.2.0.1", "12.2-rc", " 12.2",
+      "12.0.9", "12.3", "12.4.0-rc.1", "12.40.0", "12.10", "12.20.0", "13.0", "12.2.0-beta",
+      "12.2.", "12.2.0.1", "12.2-rc", " 12.2",
     ] { XCTAssertFalse(ServerCompatibility.accepts(version, families: families)) }
   }
   func testOlderQueuedSaveCannotOverwriteNewerPausedSnapshot() async throws {

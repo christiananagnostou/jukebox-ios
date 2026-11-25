@@ -3,6 +3,61 @@ import Vision
 import XCTest
 
 final class JukeboxUITests: XCTestCase {
+  #if LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+    @MainActor func testColdSavedQueueResumeMeasurements() throws {
+      executionTimeAllowance = 1200
+      let env = ProcessInfo.processInfo.environment
+      let run = try XCTUnwrap(env["JUKEBOX_QUEUE_RUN"].flatMap(UUID.init(uuidString:)))
+      let deadline = try XCTUnwrap(env["JUKEBOX_QUEUE_DEADLINE"].flatMap(Double.init))
+      let app = XCUIApplication()
+      app.launchArguments = ["--fixture", "--muted", "--transport-ui=" + run.uuidString]
+      app.launchEnvironment["JUKEBOX_QUEUE_DEADLINE"] = String(deadline)
+      func invoke(_ step: String, timeout: TimeInterval) throws -> (result: String, observedMS: Int)
+      {
+        guard deadline - Date.now.timeIntervalSince1970 > timeout + 8 else {
+          throw URLError(.timedOut)
+        }
+        app.launchEnvironment["JUKEBOX_QUEUE_SAMPLE"] = run.uuidString + ":" + step
+        let start = ProcessInfo.processInfo.systemUptime
+        app.launch()
+        defer { app.terminate() }
+        let result = app.staticTexts["queue-resume-result"].firstMatch
+        guard result.waitForExistence(timeout: timeout) else { throw URLError(.timedOut) }
+        let value = result.label
+        return (value, Int(((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()))
+      }
+      defer {
+        XCTAssertEqual(
+          try? invoke("cleanup", timeout: 10).result, "clean", "Queue sample cleanup failed")
+      }
+      let preparation = try invoke("prepare", timeout: 120).result
+      guard preparation == "prepared" else {
+        XCTFail(preparation)
+        return
+      }
+      var processes = Set<Int>()
+      for pair in 0..<30 {
+        let order = pair.isMultiple(of: 2) ? ["one", "many"] : ["many", "one"]
+        for size in order {
+          let (response, observed) = try invoke(size, timeout: 40)
+          let columns = response.split(separator: " ")
+          guard columns.count == 5, columns.first == "ok",
+            let ready = Int(columns[1]), let decoded = Int(columns[2]), let clock = Int(columns[3]),
+            let pid = Int(columns[4]), processes.insert(pid).inserted, ready > 0, ready <= decoded,
+            ready <= clock, observed >= max(decoded, clock)
+          else {
+            XCTFail("Queue sample \(pair) \(size) returned \(response)")
+            return
+          }
+          XCTContext.runActivity(
+            named:
+              "QueueResume pair=\(pair) size=\(size) ready_ms=\(ready) decoded_ms=\(decoded) clock_ms=\(clock) pid=\(pid) observed_ms=\(observed)"
+          ) { _ in }
+        }
+      }
+      XCTAssertEqual(processes.count, 60)
+    }
+  #endif
   @MainActor private func capture(
     _ name: String, app: XCUIApplication, screen: Bool = false
   ) {

@@ -53,8 +53,11 @@
 
   @MainActor
   final class AudioClockTap {
+    enum Measurement: Sendable { case timeline, onset }
+
     enum InstallationError: Error {
       case existingAudioMix
+      case missingAudioTrack
       case preferredFormatUnavailable
       case requiresNewMixedTapRuntime
       case creation(OSStatus)
@@ -89,14 +92,26 @@
       return attach(item: item, state: state, tap: tap, parameters: parameters)
     }
 
-    static func install(on item: AVPlayerItem, track: AVAssetTrack) throws -> AudioClockTap {
+    static func installForOnset(on item: AVPlayerItem) async throws -> AudioClockTap {
+      guard let track = try await item.asset.loadTracks(withMediaType: .audio).first else {
+        throw InstallationError.missingAudioTrack
+      }
+      return try install(on: item, track: track, measuring: .onset)
+    }
+
+    static func install(
+      on item: AVPlayerItem, track: AVAssetTrack, measuring measurement: Measurement = .timeline
+    ) throws -> AudioClockTap {
       guard item.audioMix == nil else { throw InstallationError.existingAudioMix }
-      let state = AudioClockTapState()
+      let state = AudioClockTapState(measurement: measurement)
       var callbacks = makeCallbacks(state)
       var tap: MTAudioProcessingTap?
-      let flags = MTAudioProcessingTapCreationFlags(kMTAudioProcessingTapCreationFlag_PostEffects)
+      let flags = MTAudioProcessingTapCreationFlags(
+        measurement == .onset
+          ? kMTAudioProcessingTapCreationFlag_PreEffects
+          : kMTAudioProcessingTapCreationFlag_PostEffects)
       let status: OSStatus
-      if #available(iOS 27.0, macOS 27.0, tvOS 27.0, visionOS 27.0, *) {
+      if #available(iOS 27.0, macOS 27.0, tvOS 27.0, visionOS 27.0, *), measurement == .timeline {
         guard
           let preferred = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: 24_000,
@@ -109,10 +124,20 @@
       }
       guard status == noErr, let tap else { throw InstallationError.creation(status) }
       let parameters = AVMutableAudioMixInputParameters(track: track)
+      if measurement == .onset { parameters.setVolume(0, at: .zero) }
       return attach(item: item, state: state, tap: tap, parameters: parameters)
     }
 
     func drain() -> [AudioClockPoint] { state.drain() }
+
+    func armOnset() {
+      _ = state.onset.compareExchange(expected: 0, desired: 1, ordering: .releasing)
+    }
+    var firstSignalUptime: UInt64? {
+      let instant = state.onset.load(ordering: .acquiring)
+      return instant > 1 ? instant : nil
+    }
+    var measuredBuffers: UInt64 { state.measuredBuffers.load(ordering: .relaxed) }
 
     var dropped: UInt64 { state.droppedCount.load(ordering: .relaxed) }
     var partial: UInt64 { state.partialCount.load(ordering: .relaxed) }
@@ -208,6 +233,9 @@
     static let capacity = 8192
     static let cellFrames = 480
     static let sampleRate = 24_000.0
+    let measurement: AudioClockTap.Measurement
+    let onset = Atomic<UInt64>(0)
+    let measuredBuffers = Atomic<UInt64>(0)
     let active = Atomic<Bool>(true)
     let processing = Atomic<Bool>(false)
     let droppedCount = Atomic<UInt64>(0)
@@ -221,7 +249,7 @@
     let sourceStatus = Atomic<Int32>(0)
     private let writeIndex = Atomic<UInt64>(0)
     private let readIndex = Atomic<UInt64>(0)
-    private let points: UnsafeMutablePointer<AudioClockPoint>
+    private let points: UnsafeMutablePointer<AudioClockPoint>?
 
     var encoding: Encoding = .unsupported
     private var stride = 0
@@ -243,15 +271,16 @@
     private var invalidCell = false
     private var bandAccumulator = AudioClockBandAccumulator()
 
-    init() {
-      points = .allocate(capacity: Self.capacity)
-      points.initialize(
+    init(measurement: AudioClockTap.Measurement = .timeline) {
+      self.measurement = measurement
+      points = measurement == .timeline ? .allocate(capacity: Self.capacity) : nil
+      points?.initialize(
         repeating: AudioClockPoint(time: 0, level: 0, detail: 0), count: Self.capacity)
     }
 
     deinit {
-      points.deinitialize(count: Self.capacity)
-      points.deallocate()
+      points?.deinitialize(count: Self.capacity)
+      points?.deallocate()
     }
 
     func prepare(_ format: AudioStreamBasicDescription) {
@@ -318,19 +347,7 @@
         drop(frames: frames)
         return
       }
-      let start = CMTimeGetSeconds(range.start)
-      let duration = CMTimeGetSeconds(range.duration)
-      if !start.isFinite, !duration.isFinite, !sawTimedBuffer { return }
-      let expectedDuration = Double(frames) / sourceRate
-      guard start.isFinite, abs(start) <= 1_000_000,
-        duration.isFinite, duration > 0,
-        abs(duration - expectedDuration) <= max(0.025, min(0.10, 0.25 * expectedDuration))
-      else {
-        status.store(3, ordering: .relaxed)
-        resetSequence()
-        drop(frames: frames)
-        return
-      }
+      if measurement == .onset && onset.load(ordering: .acquiring) != 1 { return }
       let list = UnsafeMutableAudioBufferListPointer(buffers)
       guard list.count == (planar ? channels : 1),
         list[0].mNumberChannels == (planar ? 1 : UInt32(channels)),
@@ -350,6 +367,37 @@
         }
         secondData = UnsafeRawPointer(data)
       }
+      let first = UnsafeRawPointer(firstData)
+      if measurement == .onset {
+        measuredBuffers.wrappingAdd(1, ordering: .relaxed)
+        var energy = 0.0
+        for frame in 0..<frames {
+          let offset = frame * stride
+          let left = sample(first, byteOffset: offset)
+          let right =
+            channels == 2
+            ? sample(secondData ?? first, byteOffset: offset + (planar ? 0 : sampleBytes)) : left
+          guard left.isFinite, right.isFinite, abs(left) <= 16, abs(right) <= 16 else { return }
+          energy += max(left * left, right * right)
+        }
+        if energy > Double(frames) * 0.000_001 {
+          onset.store(DispatchTime.now().uptimeNanoseconds, ordering: .releasing)
+        }
+        return
+      }
+      let start = CMTimeGetSeconds(range.start)
+      let duration = CMTimeGetSeconds(range.duration)
+      if !start.isFinite, !duration.isFinite, !sawTimedBuffer { return }
+      let expectedDuration = Double(frames) / sourceRate
+      guard start.isFinite, abs(start) <= 1_000_000,
+        duration.isFinite, duration > 0,
+        abs(duration - expectedDuration) <= max(0.025, min(0.10, 0.25 * expectedDuration))
+      else {
+        status.store(3, ordering: .relaxed)
+        resetSequence()
+        drop(frames: frames)
+        return
+      }
       let isNewStream =
         (flags & MTAudioProcessingTapFlags(kMTAudioProcessingTapFlag_StartOfStream)) != 0
       let gap = expectedStart.map { abs(start - $0) > 0.030 } ?? false
@@ -359,7 +407,6 @@
       }
       let sampleStart = expectedStart ?? start
       sawTimedBuffer = true
-      let first = UnsafeRawPointer(firstData)
       for frame in 0..<frames {
         let offset = frame * stride
         let left = sample(first, byteOffset: offset)
@@ -491,6 +538,7 @@
     }
 
     private func enqueue(_ point: AudioClockPoint) {
+      guard let points else { return }
       let write = writeIndex.load(ordering: .relaxed)
       let read = readIndex.load(ordering: .acquiring)
       guard write &- read < UInt64(Self.capacity) else {
@@ -502,6 +550,7 @@
     }
 
     func drain() -> [AudioClockPoint] {
+      guard let points else { return [] }
       let read = readIndex.load(ordering: .relaxed)
       let write = writeIndex.load(ordering: .acquiring)
       let available = min(write &- read, UInt64(Self.capacity))

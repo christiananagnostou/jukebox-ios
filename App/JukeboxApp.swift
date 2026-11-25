@@ -209,9 +209,33 @@ import SwiftUI
           backgroundUsingSettings: args.contains("--profile-background-settings"))
       } : nil
   }
+  #if DEBUG && LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+    private var queueMeasurement: QueueResumeAcceptance? {
+      let env = ProcessInfo.processInfo.environment
+      guard case .interactive(let run) = transportLaunch,
+        let request = env["JUKEBOX_QUEUE_SAMPLE"]?.split(separator: ":"), request.count == 2,
+        UUID(uuidString: String(request[0])) == run,
+        let seconds = env["JUKEBOX_QUEUE_DEADLINE"].flatMap(Double.init), seconds.isFinite
+      else { return nil }
+      return QueueResumeAcceptance(
+        run: run, operation: String(request[1]), deadline: Date(timeIntervalSince1970: seconds),
+        native: engine)
+    }
+  #endif
+  @ViewBuilder private var presentation: some View {
+    #if DEBUG && LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+      if let queueMeasurement {
+        queueMeasurement
+      } else {
+        AppPresentation(store: store, fixture: fixture, arguments: arguments)
+      }
+    #else
+      AppPresentation(store: store, fixture: fixture, arguments: arguments)
+    #endif
+  }
   var body: some Scene {
     WindowGroup {
-      AppPresentation(store: store, fixture: fixture, arguments: arguments).task {
+      presentation.task {
         guard !started else { return }
         started = true
         if profilingLaunch.isRejected || (profilingLaunch.runID != nil && !profilingFresh) {
@@ -227,6 +251,9 @@ import SwiftUI
             case .accountSignIn:
               await store.bootstrap(autoConnect: false)
             case .interactive:
+              #if LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+                if queueMeasurement != nil { return }
+              #endif
               if arguments.contains("--quick-connect-fixture") {
                 let useSaved = arguments.contains("--example-saved-connections")
                 if useSaved {
@@ -245,6 +272,9 @@ import SwiftUI
                 await store.enterFixture(service: fixture)
               }
             case .cleanup(let runID):
+              #if LIVE_MUSIC_ACCEPTANCE && AUDIO_CLOCK_ACCEPTANCE
+                try? QueueResumeAcceptance.clean(run: runID)
+              #endif
               let documents = FileManager.default.urls(
                 for: .documentDirectory, in: .userDomainMask)[0]
               engine.stop()

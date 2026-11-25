@@ -1020,13 +1020,16 @@ private final class BridgeHeldSocket: Sendable {
     }
     let url = try bridge.register(source)
     let port = try XCTUnwrap(bridge.port)
-    let response = await BridgeRawClient(port: port).run(
-      "GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n",
-      stopAfterBodyBytes: 1024)
+    let prefix = Task {
+      await BridgeRawClient(port: port).run(
+        "GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\n\r\n",
+        stopAfterBodyBytes: 1024)
+    }
+    try await wait { BridgeFixtureProtocol.state.hasHeldCompletion(owner) }
+    XCTAssertFalse(BridgeFixtureProtocol.state.ended)
+    let response = await prefix.value
     let separator = try XCTUnwrap(response.range(of: Data("\r\n\r\n".utf8)))
     let body = response[separator.upperBound...]
-    XCTAssertTrue(BridgeFixtureProtocol.state.hasHeldCompletion(owner))
-    XCTAssertFalse(BridgeFixtureProtocol.state.ended)
     XCTAssertEqual(body.count, 0, "The retained bulk policy waits for more bytes or EOF")
     XCTAssertEqual(BridgeFixtureProtocol.state.count, 1)
     BridgeFixtureProtocol.state.releaseHeldCompletion(owner)

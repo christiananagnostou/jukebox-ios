@@ -6,6 +6,13 @@ struct QueueScreen: View {
   var standalone = false
   var body: some View {
     List {
+      if store.hasRemainingQueue {
+        if store.queueRestoreFailed {
+          Button("Retry loading the rest of the queue") { store.retryQueueRestoration() }
+        } else {
+          ProgressView("Loading the rest of the queue…")
+        }
+      }
       if store.nextRequiresRetry {
         Section {
           Text("The next track couldn’t prepare. Your current track can keep playing.")
@@ -14,7 +21,7 @@ struct QueueScreen: View {
         }
       }
 
-      if store.queue.entries.isEmpty {
+      if store.queue.entries.isEmpty && !store.hasRemainingQueue {
         MusicEmptyState(
           title: "The queue is open", systemImage: "list.bullet",
           message: "Play an album or add a track to begin.")
@@ -40,6 +47,8 @@ struct QueueScreen: View {
               in: .rect(cornerRadius: 8)
             ).contentShape(.rect)
         }.buttonStyle(MusicButtonStyle(radius: 8))
+          .deleteDisabled(store.hasRemainingQueue)
+          .moveDisabled(store.hasRemainingQueue)
           .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
           .listRowBackground(MusicUI.canvas).listRowSeparator(.hidden)
           .accessibilityValue(
@@ -58,7 +67,7 @@ struct QueueScreen: View {
             MusicSheetClose(title: "Close queue", symbol: "xmark", identifier: "close-queue")
           }.sharedBackgroundVisibility(.hidden)
         }
-        if let library = store.queue.entries.first?.libraryID,
+        if !store.hasRemainingQueue, let library = store.queue.entries.first?.libraryID,
           store.queue.entries.allSatisfy({ $0.libraryID == library })
         {
           ToolbarItem(placement: .secondaryAction) {
@@ -72,6 +81,7 @@ struct QueueScreen: View {
         ToolbarItem(placement: .primaryAction) {
           EditButton().font(MusicType.control).frame(minWidth: 44, minHeight: 44)
             .buttonStyle(MusicButtonStyle())
+            .disabled(store.hasRemainingQueue)
         }.sharedBackgroundVisibility(.hidden)
       }
   }

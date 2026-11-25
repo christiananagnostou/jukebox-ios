@@ -16,6 +16,8 @@ If you’re already signed in elsewhere, choose **Show a sign-in code** on the n
 
 Keep personal server addresses, signing settings and library data local. Use invented accounts and media in contributions and tests.
 
+When you reopen Jukebox, your saved song stays paused at your last position. For large queues, Play and Next become available as soon as Jellyfin confirms the nearby songs. The Queue fills in as Jukebox checks the remaining tracks. If that check is interrupted, you can retry it from Queue.
+
 ## Playlists
 
 Jukebox uses your signed-in account’s playlist permissions. It can create private playlists, edit songs and their order, change covers, and manage sharing on playlists you own. A shared editor can make the changes Jellyfin permits.

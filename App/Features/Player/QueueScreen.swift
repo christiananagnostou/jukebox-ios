@@ -8,9 +8,9 @@ struct QueueScreen: View {
     List {
       if store.hasRemainingQueue {
         if store.queueRestoreFailed {
-          Button("Retry loading the rest of the queue") { store.retryQueueRestoration() }
+          Button("Retry loading saved queue") { store.retryQueueRestoration() }
         } else {
-          ProgressView("Loading the rest of the queue…")
+          ProgressView("Loading saved queue…")
         }
       }
       if store.nextRequiresRetry {

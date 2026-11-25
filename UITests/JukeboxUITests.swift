@@ -4036,12 +4036,46 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertFalse(app.buttons[expected].exists)
   }
 
-  @MainActor private func launchSavedConnections() -> XCUIApplication {
+  @MainActor func testSavedAccountLaunchToResponsive() throws {
+    continueAfterFailure = false
+    let options = XCTMeasureOptions()
+    options.iterationCount = 8
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
-    app.launchArguments = [
-      "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
-      "--quick-connect-fixture", "--example-saved-connections",
-    ]
+    defer { app.terminate() }
+    measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)], options: options) {
+      let launched = launchSavedConnections()
+      let accounts = launched.descendants(matching: .any).matching(identifier: "Accounts")
+        .firstMatch
+      XCTAssertTrue(accounts.waitForExistence(timeout: 10))
+      XCTAssertFalse(launched.textFields["sign-in-server"].exists)
+    }
+  }
+
+  @MainActor func testReturningAccountShowsOpeningThenRetriesOfflineWithoutSignIn() throws {
+    continueAfterFailure = false
+    let app = launchSavedConnections(extraArguments: ["--offline-first-reconnect"])
+    defer { app.terminate() }
+    let opening = app.descendants(matching: .any).matching(identifier: "account-opening").firstMatch
+    XCTAssertTrue(opening.waitForExistence(timeout: 4))
+    XCTAssertFalse(app.textFields["sign-in-server"].exists)
+    let retry = app.buttons["Try again"]
+    XCTAssertTrue(retry.waitForExistence(timeout: 12))
+    XCTAssertTrue(app.staticTexts["Couldn’t reconnect"].exists)
+    XCTAssertFalse(app.textFields["sign-in-server"].exists)
+    retry.tap()
+    let account = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    XCTAssertTrue(account.waitForExistence(timeout: 10))
+    XCTAssertFalse(retry.exists)
+    XCTAssertFalse(app.textFields["sign-in-server"].exists)
+  }
+
+  @MainActor private func launchSavedConnections(extraArguments: [String] = []) -> XCUIApplication {
+    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    app.launchArguments =
+      [
+        "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
+        "--quick-connect-fixture", "--example-saved-connections",
+      ] + extraArguments
     app.launch()
     return app
   }

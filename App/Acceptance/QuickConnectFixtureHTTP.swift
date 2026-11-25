@@ -6,7 +6,11 @@
     private var issued = 0
     private var polls = 0
     private var secret: String { "invented-challenge-\(issued)" }
-    init(codesEnabled: Bool) { self.codesEnabled = codesEnabled }
+    private var offlineOnFirstReconnect: Bool
+    init(codesEnabled: Bool, offlineOnFirstReconnect: Bool = false) {
+      self.codesEnabled = codesEnabled
+      self.offlineOnFirstReconnect = offlineOnFirstReconnect
+    }
 
     static func saveExampleConnections(to storage: LibraryStorage, vault: any TokenVault)
       async throws
@@ -60,6 +64,11 @@
         else { return HTTPReply(data: Data(), status: 401) }
         body = signedInAccount
       case ("GET", "Users/Me"):
+        if offlineOnFirstReconnect {
+          offlineOnFirstReconnect = false
+          try await Task.sleep(for: .seconds(6))
+          throw URLError(.notConnectedToInternet)
+        }
         body = ["Id": "fixture-listener", "Name": "Demo listener"]
       case ("POST", "QuickConnect/Authorize"):
         guard

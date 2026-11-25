@@ -367,8 +367,9 @@ actor JellyfinClient {
   func verifyIdentity() async throws {
     let data = try await request("Users/Me")
     guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-      object["Id"] as? String == connection.userID
-    else { throw ClientError.unauthorized }
+      let id = object["Id"] as? String, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { throw ClientError.invalidResponse }
+    guard id == connection.userID else { throw ClientError.unauthorized }
   }
   private func page(_ query: [URLQueryItem]) async throws -> [MusicItem] {
     let data = try await request(

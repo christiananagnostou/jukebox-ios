@@ -87,10 +87,11 @@ import SwiftUI
     var profileAudio: URL?
     typealias Startup = (LibraryStorage, String, any TokenVault, Bool)
     func diskStartup(_ root: URL, vault: any TokenVault, fresh: Bool = false) -> Startup {
-      let storage = (try? LibraryStorage(directory: root)) ?? LibraryStorage()
+      let storage = LibraryStorage(persistentDirectory: root)
       let idURL = root.appendingPathComponent("installation-id")
       let id = (try? String(contentsOf: idURL, encoding: .utf8)) ?? UUID().uuidString
       if !FileManager.default.fileExists(atPath: idURL.path) {
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try? id.write(to: idURL, atomically: true, encoding: .utf8)
       }
       return (storage, id, vault, fresh)
@@ -169,7 +170,9 @@ import SwiftUI
     let accountFixture: (any HTTPTransport)?
     #if DEBUG
       if case .interactive = transport, args.contains("--quick-connect-fixture") {
-        accountFixture = QuickConnectFixtureHTTP(codesEnabled: !args.contains("--codes-disabled"))
+        accountFixture = QuickConnectFixtureHTTP(
+          codesEnabled: !args.contains("--codes-disabled"),
+          offlineOnFirstReconnect: args.contains("--offline-first-reconnect"))
       } else {
         accountFixture = nil
       }

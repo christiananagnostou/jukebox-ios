@@ -14,14 +14,16 @@ actor LibraryStorage {
     self.directory = directory
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   }
+  init(persistentDirectory: URL) {
+    directory = persistentDirectory
+  }
   init() {
     directory = URL(fileURLWithPath: "/preview-only")
     memory = [:]
   }
   private func read(_ url: URL) throws -> Data? {
     if let memory { return memory[url] }
-    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-    return try Data(contentsOf: url)
+    do { return try Data(contentsOf: url) } catch CocoaError.fileReadNoSuchFile { return nil }
   }
   private func write<T: Encodable>(_ value: T, to url: URL) throws {
     try writeData(JSONEncoder().encode(value), to: url)
@@ -321,6 +323,9 @@ actor LibraryStorage {
     }
   }
   func connections() throws -> [Connection] {
+    if memory == nil {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
     let url = directory.appendingPathComponent("connections.json")
     guard let data = try read(url) else { return [] }
     var seen = Set<String>()

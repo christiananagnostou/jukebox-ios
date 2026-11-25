@@ -16,7 +16,9 @@ If you’re already signed in elsewhere, choose **Show a sign-in code** on the n
 
 Keep personal server addresses, signing settings and library data local. Use invented accounts and media in contributions and tests.
 
-When you reopen Jukebox, your saved song stays paused at your last position. For large queues, Play and Next become available as soon as Jellyfin confirms the nearby songs. The Queue fills in as Jukebox checks the remaining tracks. If that check is interrupted, you can retry it from Queue.
+When you reopen Jukebox, it checks your saved sign-in and opens Home. If the server is unreachable, **Try again** reconnects with the same account. An expired sign-in takes you back to your saved server address.
+
+Home opens while Jellyfin checks the saved queue. Your saved song stays paused at your last position. For large queues, Play and Next become available as soon as Jellyfin confirms the nearby songs. The Queue fills in as Jukebox checks the remaining tracks. If that check is interrupted, you can retry it from Queue.
 
 ## Playlists
 
@@ -29,6 +31,8 @@ On Jellyfin 12.4.0, check that an imported M3U shows the expected tracks in Jell
 ## Checks
 
 GitHub Actions runs the Core suite on macOS for pull requests and pushes to `main`. Run `swift test --jobs 1` locally and `python3 -B -m tools.add_source --check` to check Xcode source membership. The JukeboxUITests target exercises the native interface with invented music.
+
+To measure account restoration, run `swift test --jobs 1 -Xswiftc -DMEASURE_ACCOUNT_STARTUP --filter AccountStartupTimingTests`. The test alternates empty and 40-entry queues across 48 launches of the Core store, with fixed delays for identity, library and queue requests. Each sample reports milliseconds to the authenticated Home shell and to the usable Music library.
 
 To repeat the Jellyfin 12.4 compatibility check on a Mac, unpack the stock server and Jellyfin FFmpeg and pass their executable paths to the test. [Jellyfin 12.4 release](https://github.com/jellyfin/jellyfin/releases/tag/v12.4)
 

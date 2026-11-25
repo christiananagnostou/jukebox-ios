@@ -1053,6 +1053,38 @@ private final class BridgeHeldSocket: Sendable {
     }
     consumer.invalidateAndCancel()
   }
+  func testIgnoredTwoByteProbeArrivesWhileTheRestOfTheFullResponseIsHeld() async throws {
+    let source = try fixture("mp3", ranged: false, mode: .prefixHeld)
+    let owner = BridgeFixtureProtocol.state.owner
+    let expected = try Data(
+      contentsOf: Bundle.module.url(
+        forResource: "bridge", withExtension: "mp3", subdirectory: "Fixtures")!)
+    let bridge = MediaHTTPBridge(protocolClasses: [BridgeFixtureProtocol.self])
+    try await bridge.start()
+    let consumer = client()
+    var request = URLRequest(url: try bridge.register(source))
+    request.setValue("bytes=0-1", forHTTPHeaderField: "Range")
+    let download = Task { try await consumer.data(for: request) }
+    defer {
+      download.cancel()
+      BridgeFixtureProtocol.state.releaseHeldCompletion(owner)
+      consumer.invalidateAndCancel()
+      bridge.stop()
+    }
+    try await wait {
+      guard BridgeFixtureProtocol.state.hasHeldCompletion(owner) else { return false }
+      let tasks = await consumer.allTasks
+      return tasks.count == 1 && tasks[0].countOfBytesReceived == 2
+    }
+    XCTAssertFalse(BridgeFixtureProtocol.state.ended)
+    BridgeFixtureProtocol.state.releaseHeldCompletion(owner)
+    let (received, info) = try await download.value
+    let response = try XCTUnwrap(info as? HTTPURLResponse)
+    XCTAssertEqual(response.statusCode, 200)
+    XCTAssertNil(response.value(forHTTPHeaderField: "Content-Range"))
+    XCTAssertEqual(received, expected)
+    XCTAssertEqual(BridgeFixtureProtocol.state.count, 1)
+  }
   func testHeldPrefixRegistrationAndRetirementAreRequestOwnedAndTerminal() {
     let state = BridgeFixtureState()
     let url = URL(string: "http://fixture.invalid/owned-prefix")!

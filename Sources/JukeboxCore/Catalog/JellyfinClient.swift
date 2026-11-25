@@ -402,17 +402,37 @@ actor JellyfinClient {
     }
   }
   func validate(ids: [String]) async throws -> [MusicItem] {
-    let requested = Set(ids)
-    let ids = Array(requested)
+    var requested = Set<String>()
+    let ids = ids.filter { requested.insert($0).inserted }
     var result: [MusicItem] = []
     var seen = Set<String>()
     guard !ids.isEmpty else { return [] }
-    for root in try await musicLibraries(refresh: false) {
-      for offset in stride(from: 0, to: ids.count, by: 40) {
-        let batch = Array(ids[offset..<min(offset + 40, ids.count)])
-        let items = try await catalog(CatalogQuery(library: root.id, category: .songs, ids: batch))
-        for item in items where requested.contains(item.id) && seen.insert(item.id).inserted {
-          result.append(item)
+    let batchSize = 40
+    let windowSize = batchSize * 4
+    let roots = try await musicLibraries(refresh: false)
+    let generation = musicRootRequest
+    for root in roots {
+      for start in stride(from: 0, to: ids.count, by: windowSize) {
+        try Task.checkCancellation()
+        let end = min(start + windowSize, ids.count)
+        let pages = try await withThrowingTaskGroup(of: (Int, [MusicItem]).self) { group in
+          for offset in stride(from: start, to: end, by: batchSize) {
+            let batch = Array(ids[offset..<min(offset + batchSize, end)])
+            group.addTask {
+              let query = CatalogQuery(library: root.id, category: .songs, ids: batch)
+              return (offset, try await self.catalog(query))
+            }
+          }
+          var pages: [(Int, [MusicItem])] = []
+          for try await page in group { pages.append(page) }
+          return pages.sorted { $0.0 < $1.0 }
+        }
+        try Task.checkCancellation()
+        guard generation == musicRootRequest else { throw CancellationError() }
+        for (_, items) in pages {
+          for item in items where requested.contains(item.id) && seen.insert(item.id).inserted {
+            result.append(item)
+          }
         }
       }
     }

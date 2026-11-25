@@ -4040,20 +4040,29 @@ final class JukeboxUITests: XCTestCase {
     continueAfterFailure = false
     let options = XCTMeasureOptions()
     options.iterationCount = 8
-    let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
+    let app = savedConnectionsApp()
+    let accounts = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
+    var homeMilliseconds: [Int] = []
     defer { app.terminate() }
     measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)], options: options) {
-      let launched = launchSavedConnections()
-      let accounts = launched.descendants(matching: .any).matching(identifier: "Accounts")
-        .firstMatch
-      XCTAssertTrue(accounts.waitForExistence(timeout: 10))
-      XCTAssertFalse(launched.textFields["sign-in-server"].exists)
+      if app.state != .notRunning { app.terminate() }
+      let start = ProcessInfo.processInfo.systemUptime
+      app.launch()
+      XCTAssertTrue(accounts.exists || accounts.waitForExistence(timeout: 10))
+      homeMilliseconds.append(
+        Int(((ProcessInfo.processInfo.systemUptime - start) * 1_000).rounded()))
+      XCTAssertFalse(app.textFields["sign-in-server"].exists)
     }
+    let measured = homeMilliseconds.suffix(options.iterationCount)
+    XCTAssertEqual(measured.count, options.iterationCount)
+    let values = measured.map(String.init).joined(separator: ",")
+    XCTContext.runActivity(named: "Saved account Home milliseconds " + values) { _ in }
   }
 
   @MainActor func testReturningAccountShowsOpeningThenRetriesOfflineWithoutSignIn() throws {
     continueAfterFailure = false
-    let app = launchSavedConnections(extraArguments: ["--offline-first-reconnect"])
+    let app = savedConnectionsApp(extraArguments: ["--offline-first-reconnect"])
+    app.launch()
     defer { app.terminate() }
     let opening = app.descendants(matching: .any).matching(identifier: "account-opening").firstMatch
     XCTAssertTrue(opening.waitForExistence(timeout: 4))
@@ -4069,20 +4078,20 @@ final class JukeboxUITests: XCTestCase {
     XCTAssertFalse(app.textFields["sign-in-server"].exists)
   }
 
-  @MainActor private func launchSavedConnections(extraArguments: [String] = []) -> XCUIApplication {
+  @MainActor private func savedConnectionsApp(extraArguments: [String] = []) -> XCUIApplication {
     let app = XCUIApplication(bundleIdentifier: "dev.jukebox.ios")
     app.launchArguments =
       [
         "--fixture", "--muted", "--transport-ui=" + UUID().uuidString,
         "--quick-connect-fixture", "--example-saved-connections",
       ] + extraArguments
-    app.launch()
     return app
   }
 
   @MainActor func testInspectCancelAndRemoveOneOfThreeSameNameConnections() throws {
     continueAfterFailure = false
-    let app = launchSavedConnections()
+    let app = savedConnectionsApp()
+    app.launch()
     defer { app.terminate() }
     let menu = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     let rows = app.buttons.matching(
@@ -4159,7 +4168,8 @@ final class JukeboxUITests: XCTestCase {
 
   @MainActor func testAccountMenuQuickConnectAndSignOutAppearance() throws {
     continueAfterFailure = false
-    let app = launchSavedConnections()
+    let app = savedConnectionsApp()
+    app.launch()
     defer { app.terminate() }
     let account = app.descendants(matching: .any).matching(identifier: "Accounts").firstMatch
     XCTAssertTrue(account.waitForExistence(timeout: 12))

@@ -74,6 +74,10 @@ struct QueueState: Codable, Equatable, Sendable {
     self.position = position
     self.quality = quality
   }
+  init(restoring state: Self, membershipRevision: UUID) {
+    self = state
+    self.membershipRevision = membershipRevision
+  }
   static func == (left: Self, right: Self) -> Bool {
     left.entries == right.entries && left.index == right.index
       && left.position == right.position && left.quality == right.quality
@@ -104,11 +108,13 @@ struct QueueState: Codable, Equatable, Sendable {
     let currentID = current?.id
     let oldPosition = position
     let items = Dictionary(allowed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    entries = entries.compactMap { entry in
-      items[entry.track.id].map { QueueEntry($0, id: entry.id, libraryID: entry.libraryID) }
+    if entries.contains(where: { items[$0.track.id] != $0.track }) {
+      entries = entries.compactMap { entry in
+        items[entry.track.id].map { QueueEntry($0, id: entry.id, libraryID: entry.libraryID) }
+      }
+      index = entries.firstIndex { $0.id == currentID } ?? 0
+      position = current?.id == currentID ? oldPosition : 0
     }
-    index = entries.firstIndex { $0.id == currentID } ?? 0
-    position = current?.id == currentID ? oldPosition : 0
     normalize()
   }
   func restoredForPlayback(using service: any MusicCatalogServing) async throws

@@ -211,7 +211,8 @@
         server: try ServerAddress("https://fixture.invalid"), userID: "benchmark",
         username: "Fixture")
       let names: Set<String> = [
-        account.id + ".json", account.id + ".recent.json", "connections.json",
+        account.id + ".json", account.id + ".progress.json", account.id + ".recent.json",
+        "connections.json",
       ]
       for folder in try children(root) {
         guard ["one", "many", "sample"].contains(folder.lastPathComponent) else {

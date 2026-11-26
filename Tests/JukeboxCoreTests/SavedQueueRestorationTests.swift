@@ -48,6 +48,51 @@ private actor RestoringCatalog: MusicCatalogServing {
 }
 
 extension StoreTests {
+  func testDiskQueueProgressSurvivesUnpreparedNextTicksSeekAndFreshStore() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let storage = try LibraryStorage(directory: directory)
+    let connection = Connection(
+      server: try ServerAddress("https://invented.invalid"), userID: "one", username: "One")
+    let saved = savedQueue(count: 7_790, cursor: 4_001)
+    let catalog = RestoringCatalog(saved.entries)
+    let file = directory.appendingPathComponent(connection.id + ".json")
+    try await storage.saveConnections([connection])
+    try await storage.save(saved, account: connection.id)
+    let firstSnapshot = try Data(contentsOf: file)
+    let driver = DriverSpy()
+    let store = PlayerStore(
+      storage: storage, vault: ImmediateVault(), driver: driver, deviceID: "fixture",
+      factory: { _, _ in catalog })
+    await store.bootstrap()
+    try await wait { store.current != nil && !store.hasRemainingQueue }
+    store.next()
+    let repeatID = try XCTUnwrap(saved.successor?.id)
+    try await wait { store.playing && driver.current == repeatID }
+    XCTAssertNotEqual(repeatID, saved.current?.id)
+    driver.onEvent?(.position(repeatID, 15.5))
+    driver.sampledPausePosition = 16.25
+    store.pause()
+    store.seek(47.25)
+    try await store.saveNow()
+    XCTAssertEqual(try Data(contentsOf: file), firstSnapshot)
+    let freshDriver = DriverSpy()
+    let reopened = PlayerStore(
+      storage: try LibraryStorage(directory: directory), vault: ImmediateVault(),
+      driver: freshDriver, deviceID: "fixture", factory: { _, _ in catalog })
+    await reopened.bootstrap()
+    try await wait { reopened.current != nil && !reopened.hasRemainingQueue }
+    XCTAssertEqual(reopened.queue.entries, saved.entries)
+    XCTAssertEqual(reopened.queue.index, saved.index + 1)
+    XCTAssertEqual(reopened.current?.id, repeatID)
+    XCTAssertEqual(reopened.queue.position, 47.25)
+    XCTAssertEqual(reopened.phase, .paused)
+    reopened.play()
+    try await wait { reopened.playing }
+    XCTAssertEqual(freshDriver.current, repeatID)
+    XCTAssertEqual(freshDriver.startedPositions, [47.25])
+  }
+
   private func savedQueue(count: Int = 140, cursor: Int = 68) -> QueueState {
     var entries = (0..<count).map { index in
       QueueEntry(

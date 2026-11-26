@@ -2,6 +2,65 @@ import Darwin
 import Foundation
 
 actor LibraryStorage {
+  private enum QueueFile: Equatable {
+    case memory
+    case disk(device: dev_t, inode: ino_t)
+  }
+  private struct QueueVersion {
+    let membership: UUID
+    let playlist: String?
+    let generation: UUID
+    let file: QueueFile
+  }
+  private struct QueueSnapshot: Codable {
+    let queue: QueueState
+    let generation: UUID?
+    private enum CodingKeys: String, CodingKey { case queueGeneration }
+
+    init(_ queue: QueueState, generation: UUID) {
+      self.queue = queue
+      self.generation = generation
+    }
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      generation = try container.decodeIfPresent(UUID.self, forKey: .queueGeneration)
+      queue = try QueueState(from: decoder)
+    }
+    func encode(to encoder: Encoder) throws {
+      try queue.encode(to: encoder)
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encodeIfPresent(generation, forKey: .queueGeneration)
+    }
+  }
+  private struct QueueProgress: Codable {
+    let generation: UUID
+    let index: Int
+    let occurrence: UUID?
+    let position: Double
+    let quality: StreamQuality
+
+    init(_ queue: QueueState, generation: UUID) {
+      self.generation = generation
+      index = queue.index
+      occurrence = queue.current?.id
+      position = queue.position
+      quality = queue.quality
+    }
+    func apply(to queue: inout QueueState, generation: UUID) {
+      guard self.generation == generation, position.isFinite, position >= 0 else { return }
+      if queue.entries.isEmpty {
+        guard index == 0, occurrence == nil, position == 0 else { return }
+      } else {
+        guard queue.entries.indices.contains(index), queue.entries[index].id == occurrence else {
+          return
+        }
+      }
+      queue.index = index
+      queue.position = position
+      queue.quality = quality
+    }
+  }
+  private var queueVersions: [String: QueueVersion] = [:]
   private var revisions: [String: UInt64] = [:]
   private var leases: [String: UUID] = [:]
   private var browseRevisions: [String: UInt64] = [:]
@@ -74,16 +133,63 @@ actor LibraryStorage {
   func save(_ state: QueueState, account: String) throws {
     var clean = state
     clean.normalize()
-    try write(clean, to: path(account))
+    let url = try path(account)
+    if let version = queueVersions[account], version.membership == clean.membershipRevision,
+      version.playlist == clean.playlistID, queueFile(at: url) == version.file
+    {
+      try write(QueueProgress(clean, generation: version.generation), to: progressPath(url))
+    } else {
+      let generation = UUID()
+      try write(QueueSnapshot(clean, generation: generation), to: url)
+      remember(clean, generation: generation, account: account, url: url)
+    }
+  }
+  private func queueFile(at url: URL) -> QueueFile? {
+    if let memory { return memory[url] == nil ? nil : .memory }
+    var info = stat()
+    guard lstat(url.path, &info) == 0 else { return nil }
+    return .disk(device: info.st_dev, inode: info.st_ino)
+  }
+  private func remember(_ state: QueueState, generation: UUID, account: String, url: URL) {
+    queueVersions[account] = queueFile(at: url).map {
+      QueueVersion(
+        membership: state.membershipRevision, playlist: state.playlistID, generation: generation,
+        file: $0)
+    }
+  }
+  private func progressPath(_ queueURL: URL) -> URL {
+    queueURL.deletingPathExtension().appendingPathExtension("progress.json")
   }
   func restore(account: String) throws -> QueueState? {
-    guard let data = try read(path(account)) else { return nil }
-    var state = try JSONDecoder().decode(QueueState.self, from: data)
+    let url = try path(account)
+    guard let data = try read(url) else {
+      queueVersions[account] = nil
+      return nil
+    }
+    let decoder = JSONDecoder()
+    let snapshot = try decoder.decode(QueueSnapshot.self, from: data)
+    var state = snapshot.queue
     state.normalize()
+    guard let generation = snapshot.generation else {
+      queueVersions[account] = nil
+      return state
+    }
+    if let version = queueVersions[account], version.generation == generation {
+      state = QueueState(restoring: state, membershipRevision: version.membership)
+    } else {
+      remember(state, generation: generation, account: account, url: url)
+    }
+    if let data = try read(progressPath(url)),
+      let progress = try? decoder.decode(QueueProgress.self, from: data)
+    {
+      progress.apply(to: &state, generation: generation)
+    }
     return state
   }
   func erase(account: String) throws {
     let playlistDirectory = try playlistDirectory(account)
+    let queueURL = try path(account)
+    queueVersions[account] = nil
     if let memory {
       for url in memory.keys where url.deletingLastPathComponent() == playlistDirectory {
         self.memory?[url] = nil
@@ -91,8 +197,8 @@ actor LibraryStorage {
     }
     var failure: Error?
     for url in [
-      try path(account), try browsePath(account), try searchPath(account), try recentPath(account),
-      playlistDirectory,
+      queueURL, progressPath(queueURL), try browsePath(account), try searchPath(account),
+      try recentPath(account), playlistDirectory,
     ] {
       if memory != nil {
         memory![url] = nil

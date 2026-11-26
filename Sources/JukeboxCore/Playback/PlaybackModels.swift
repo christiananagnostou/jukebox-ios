@@ -112,9 +112,9 @@ struct QueueState: Codable, Equatable, Sendable {
       entries = entries.compactMap { entry in
         items[entry.track.id].map { QueueEntry($0, id: entry.id, libraryID: entry.libraryID) }
       }
-      index = entries.firstIndex { $0.id == currentID } ?? 0
-      position = current?.id == currentID ? oldPosition : 0
     }
+    index = entries.firstIndex { $0.id == currentID } ?? 0
+    position = current?.id == currentID ? oldPosition : 0
     normalize()
   }
   func restoredForPlayback(using service: any MusicCatalogServing) async throws

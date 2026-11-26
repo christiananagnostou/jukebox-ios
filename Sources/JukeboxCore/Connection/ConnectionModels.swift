@@ -16,7 +16,7 @@ enum ClientError: Error, Equatable, LocalizedError {
       "This development build supports Jellyfin \(ServerCompatibility.supportedVersions). Other versions have not been verified."
     case .invalidResponse: "The server returned an unexpected response. Try again."
     case .secureStorage:
-      "Secure sign-in storage isn’t available. Rebuild the app with normal signing, then try again."
+      "Jukebox couldn’t access your saved sign-in. Unlock your device and try again."
     case .secureConnectionRequired:
       "iOS blocked this insecure connection. Use the server’s HTTPS address."
     case .secureConnectionFailed:
@@ -269,4 +269,20 @@ enum ServerCompatibility {
     else { return false }
     return families.contains(parts[0] + "." + parts[1])
   }
+}
+
+enum AccountSession {
+  case opening
+  case reconnecting(Connection)
+  case signedOut(suggested: Connection?)
+  case recovery(AccountRecovery)
+  case ending(Connection, expired: Bool)
+  case signedIn(Connection, MusicBrowser)
+}
+
+enum AccountRecovery {
+  case savedAccounts
+  case reconnect(Connection, ConnectionStepError)
+  case expired(Connection)
+  case requiresHTTPS(Connection)
 }

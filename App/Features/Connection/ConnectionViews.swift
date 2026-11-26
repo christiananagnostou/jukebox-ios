@@ -17,6 +17,13 @@ struct LoginScreen: View {
   @State private var selectedConnection: Connection?
   @FocusState private var editingAddress: Bool
 
+  init(store: PlayerStore, fixture: FixtureCatalog, suggested: Connection? = nil) {
+    self.store = store
+    self.fixture = fixture
+    _address = State(initialValue: suggested?.server.url.absoluteString ?? "")
+    _username = State(initialValue: suggested?.username ?? "")
+  }
+
   private var server: ServerAddress? { try? ServerAddress(address) }
   private var mayContinue: Bool {
     server?.url.scheme == "https" && checking == nil && !store.busy && store.pendingSignOut == nil
@@ -60,9 +67,6 @@ struct LoginScreen: View {
           .signInHelp()
         }
         if !store.connections.isEmpty { savedAccounts }
-        if store.pendingSignOut != nil {
-          Button("Retry sign-out") { Task { await store.finishSignOut() } }
-        }
         Button("Try invented music") { Task { await store.enterFixture(service: fixture) } }
           .font(.subheadline).frame(minHeight: MusicUI.target)
           .disabled(store.busy || checking != nil || store.pendingSignOut != nil)

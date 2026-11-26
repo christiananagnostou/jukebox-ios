@@ -50,7 +50,8 @@ enum TransportControlLaunch {
           || options == ["--read-only-mix"]
           || options == ["--quick-connect-fixture"]
           || options == ["--quick-connect-fixture", "--codes-disabled"]
-          || options == ["--quick-connect-fixture", "--example-saved-connections"]
+          || options.subtracting(["--offline-first-reconnect"])
+            == ["--quick-connect-fixture", "--example-saved-connections"]
         self =
           supplied.count == arguments.count && supplied.isSuperset(of: required) && validScenario
           ? .interactive(id) : .rejected

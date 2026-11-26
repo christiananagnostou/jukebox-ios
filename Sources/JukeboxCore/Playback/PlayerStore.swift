@@ -3,8 +3,15 @@ import Observation
 
 @MainActor @Observable final class PlayerStore {
   private(set) var connections: [Connection] = []
-  private(set) var active: Connection?
-  private(set) var browser: MusicBrowser?
+  private(set) var session = AccountSession.opening
+  var active: Connection? {
+    guard case .signedIn(let connection, _) = session else { return nil }
+    return connection
+  }
+  var browser: MusicBrowser? {
+    guard case .signedIn(_, let browser) = session else { return nil }
+    return browser
+  }
   private(set) var queue = QueueState() {
     didSet {
       if queue.current != oldValue.current { playerContentRevision = UUID() }
@@ -52,26 +59,27 @@ import Observation
   private var queueMembership = QueueMembership(QueueState(), account: nil)
   @MainActor private final class QueueRestoration {
     var saved: QueueState
-    let verified: [MusicItem]
+    enum Stage {
+      case current
+      case remaining([MusicItem])
+    }
+    let stage: Stage
     var task: Task<Void, Never>?
     var actions: [(PlayerStore) -> Void] = []
     private var membership: (UUID, QueueMembership)?
-    init(_ saved: QueueState, ready: QueueState) {
+    init(_ saved: QueueState, stage: Stage) {
       self.saved = saved
-      verified = ready.entries.map(\.track)
-    }
-    var remainingIDs: [String] {
-      let known = Set(verified.map(\.id))
-      return saved.entries.compactMap { known.contains($0.track.id) ? nil : $0.track.id }
+      self.stage = stage
     }
     func checkpoint(_ ready: QueueState) -> QueueState {
       var result = saved
+      result.quality = ready.quality
+      if case .current = stage { return result }
       let index = ready.current.flatMap { entry in
         saved.entries.firstIndex { $0.id == entry.id }
       }
       result.index = index ?? 0
       result.position = index == nil ? 0 : ready.position
-      result.quality = ready.quality
       return result
     }
     func matches(_ selection: PlaybackSelection, account: UUID) -> Bool {
@@ -147,7 +155,10 @@ import Observation
   private let prepareCover: @Sendable (Data) async -> Data?
   @ObservationIgnored private var playCommandRevision: UInt64 = 0
   @ObservationIgnored private var removingSavedConnection = false
-  private(set) var pendingSignOut: String?
+  var pendingSignOut: String? {
+    guard case .ending(let account, _) = session else { return nil }
+    return account.id
+  }
   @ObservationIgnored private var coverOrder: [CoverKey] = []
   @ObservationIgnored private var coverBytes = 0
   private static let coverCountLimit = 64
@@ -342,14 +353,13 @@ import Observation
     recentRevision = 0
     recentLoadID = UUID()
     browser?.retire()
-    browser = nil
+    session = .signedOut(suggested: nil)
     epoch = UUID()
     playID = UUID()
     phase = .paused
     showPlayer = false
     showQueue = false
     stopDriver(reason: .accountRetired)
-    active = nil
     service = nil
     retireCovers(except: nil)
     covers = [:]
@@ -365,14 +375,47 @@ import Observation
     error = nil
   }
   func bootstrap(autoConnect: Bool = true) async {
-    guard !busy && active == nil else { return }
+    guard case .opening = session, !busy else { return }
+    busy = true
+    let generation = epoch
     do {
+      let saved = try await storage.connections()
+      guard generation == epoch else { return }
+      connections = saved
       await restoreCatalogDevicePreferences()
-      connections = try await storage.connections()
-      if autoConnect, let first = connections.first, first.server.supportsCredentials {
-        await activate(first)
+      guard generation == epoch else { return }
+      busy = false
+      guard autoConnect, let first = saved.first else {
+        session = .signedOut(suggested: nil)
+        return
       }
-    } catch { self.error = "Saved connections couldn’t be opened. You can sign in again." }
+      guard first.server.supportsCredentials else {
+        session = .recovery(.requiresHTTPS(first))
+        return
+      }
+      await reconnect(first)
+    } catch {
+      guard generation == epoch else { return }
+      busy = false
+      session = .recovery(.savedAccounts)
+    }
+  }
+  func retryAccountStartup() async {
+    guard case .recovery(let reason) = session, !busy else { return }
+    switch reason {
+    case .savedAccounts:
+      session = .opening
+      await bootstrap()
+    case .reconnect(let connection, _):
+      await reconnect(connection)
+    case .expired(let connection), .requiresHTTPS(let connection):
+      session = .signedOut(suggested: connection)
+    }
+  }
+  private func reconnect(_ connection: Connection) async {
+    session = .reconnecting(connection)
+    await activate(connection, restoringAtLaunch: true)
+    if let pending = restoringQueue, case .current = pending.stage { await pending.task?.value }
   }
   func signIn(address: String, username: String, password: String)
     async
@@ -461,6 +504,9 @@ import Observation
     }
   }
   func activate(_ connection: Connection) async {
+    await activate(connection, restoringAtLaunch: false)
+  }
+  private func activate(_ connection: Connection, restoringAtLaunch: Bool) async {
     guard !busy, !removingSavedConnection, pendingSignOut == nil else { return }
     busy = true
     var generation = epoch
@@ -475,6 +521,8 @@ import Observation
       guard let token = try await vault.read(account: connection.id) else {
         throw ClientError.unauthorized
       }
+      guard generation == epoch else { return }
+      try Task.checkCancellation()
       let api = try factory(connection, token)
       step = .identity
       try await api.verifyIdentity()
@@ -495,7 +543,7 @@ import Observation
       else { return }
       step = .restoration
       let savedQueue = try await storage.restore(account: connection.id) ?? QueueState()
-      let restored = try await savedQueue.restoredForPlayback(using: api)
+      let restored = restoringAtLaunch ? nil : try await savedQueue.restoredForPlayback(using: api)
       let preferences =
         (try? await storage.catalogPreferences(account: connection.id))
         ?? CatalogBrowsePreferences()
@@ -505,7 +553,7 @@ import Observation
       else { return }
       let saved = [connection] + connections.filter { $0.id != connection.id }
       step = .savedConnection
-      try await storage.saveConnections(saved)
+      if saved != connections { try await storage.saveConnections(saved) }
       guard generation == epoch else { return }
       let lease = await storage.lease(account: connection.id)
       guard generation == epoch else { return }
@@ -513,18 +561,25 @@ import Observation
       generation = epoch
       isFixture = false
       service = api
-      active = connection
       storageLease = lease
-      installBrowser(api, account: connection.id, preferences: preferences)
-      installRestoredQueue(restored)
+      installBrowser(api, connection: connection, preferences: preferences)
+      if let restored {
+        installRestoredQueue(restored)
+      } else if savedQueue.current != nil {
+        queue.quality = savedQueue.quality
+        restoringQueue = QueueRestoration(savedQueue, stage: .current)
+        retryQueueRestoration()
+      } else {
+        queue = savedQueue
+      }
       connections = saved
       #if DEBUG
         Self.transportActivationReceipt?.accept(
           store: self, lease: TransportAcceptanceLease(epoch: epoch, intent: playID))
       #endif
-    } catch is CancellationError {
     } catch {
       guard generation == epoch else { return }
+      if error is CancellationError && !restoringAtLaunch { return }
       if error as? ClientError == .unauthorized {
         if active?.id == connection.id {
           await logout(ifCurrent: generation)
@@ -532,17 +587,32 @@ import Observation
         }
         do {
           try await vault.erase(account: connection.id)
+          guard generation == epoch else { return }
           try await storage.removeSavedConnection(account: connection.id)
           guard generation == epoch else { return }
           connections.removeAll { $0.id == connection.id }
+          if restoringAtLaunch {
+            session = .recovery(.expired(connection))
+            return
+          }
         } catch {
           guard generation == epoch else { return }
+          if restoringAtLaunch {
+            session = .recovery(
+              .reconnect(connection, ConnectionStepError(step: .secureStorage, error: error)))
+            return
+          }
           self.error =
             "This saved sign-in has expired. Open its connection details to finish removing it."
           return
         }
       }
-      self.error = message(ConnectionStepError(step: step, error: error))
+      let detail = ConnectionStepError(step: step, error: error)
+      if restoringAtLaunch {
+        session = .recovery(.reconnect(connection, detail))
+      } else {
+        self.error = message(detail)
+      }
     }
   }
   func removeSavedConnection(_ connection: Connection) async throws {
@@ -561,9 +631,10 @@ import Observation
     connections.removeAll { $0.id == connection.id }
   }
   func enterFixture(service: any MusicCatalogServing) async {
-    guard !busy else { return }
+    guard !busy, pendingSignOut == nil else { return }
     persist()
     retire()
+    session = .opening
     isFixture = true
     busy = true
     let generation = epoch
@@ -580,22 +651,33 @@ import Observation
         ?? CatalogBrowsePreferences()
       let lease = await storage.lease(account: connection.id)
       guard generation == epoch else { return }
-      active = connection
       self.service = service
       storageLease = lease
-      installBrowser(service, account: connection.id, preferences: preferences)
+      installBrowser(service, connection: connection, preferences: preferences)
       installRestoredQueue(restored)
       busy = false
     } catch {
+      guard generation == epoch else { return }
+      session = .signedOut(suggested: nil)
       busy = false
       self.error = message(error)
     }
   }
-  private func installRestoredQueue(_ result: (ready: QueueState, remainder: QueueState?)) {
+  private func installRestoredQueue(
+    _ result: (ready: QueueState, remainder: QueueState?), actions: [(PlayerStore) -> Void] = []
+  ) {
     queue = result.ready
-    guard let remainder = result.remainder else { return }
-    restoringQueue = QueueRestoration(remainder, ready: result.ready)
-    retryQueueRestoration()
+    if let remainder = result.remainder {
+      let pending = QueueRestoration(
+        remainder, stage: .remaining(result.ready.entries.map(\.track)))
+      pending.actions = actions
+      restoringQueue = pending
+      retryQueueRestoration()
+    } else {
+      restoringQueue = nil
+      let generation = epoch
+      for action in actions where epoch == generation { action(self) }
+    }
   }
   private func cancelQueueRestoration() {
     restoringQueue?.task?.cancel()
@@ -603,12 +685,38 @@ import Observation
     queueRestoreFailed = false
   }
   func retryQueueRestoration() {
-    guard let pending = restoringQueue, pending.task == nil, let service else { return }
+    guard let pending = restoringQueue, pending.task == nil, let service, let browser else {
+      return
+    }
     queueRestoreFailed = false
     pending.task = Task(priority: .utility) { [weak self, weak pending] in
       do {
         try Task.checkCancellation()
-        guard let remaining = pending?.remainingIDs else { return }
+        guard let pending else { return }
+        let verified: [MusicItem]
+        switch pending.stage {
+        case .current:
+          try await browser.prepareSavedQueueLibraries()
+          let saved = pending.saved
+          var result = try await saved.restoredForPlayback(using: service)
+          try Task.checkCancellation()
+          guard let self, self.restoringQueue === pending else { return }
+          if saved.membershipRevision != pending.saved.membershipRevision {
+            let retained = Set(pending.saved.entries.map(\.id))
+            let revoked = Set(saved.entries.lazy.map(\.id).filter { !retained.contains($0) })
+            result.ready.remove(revoked)
+            result.remainder?.remove(revoked)
+          }
+          result.ready.quality = self.queue.quality
+          self.installRestoredQueue(result, actions: pending.actions)
+          return
+        case .remaining(let items):
+          verified = items
+        }
+        let known = Set(verified.map(\.id))
+        let remaining = pending.saved.entries.compactMap {
+          known.contains($0.track.id) ? nil : $0.track.id
+        }
         let items: [MusicItem]
         do {
           items = try await service.validate(ids: remaining)
@@ -617,9 +725,9 @@ import Observation
           items = try await service.validate(ids: remaining)
         }
         try Task.checkCancellation()
-        guard let self, let pending, self.restoringQueue === pending else { return }
+        guard let self, self.restoringQueue === pending else { return }
         var complete = pending.checkpoint(self.queue)
-        complete.reconcile(pending.verified + items)
+        complete.reconcile(verified + items)
         self.restoringQueue = nil
         self.queue = complete
         self.prepareNext()
@@ -642,21 +750,22 @@ import Observation
     return true
   }
   private func installBrowser(
-    _ service: any MusicCatalogServing, account: String? = nil,
-    preferences: CatalogBrowsePreferences = CatalogBrowsePreferences()
+    _ service: any MusicCatalogServing, connection: Connection,
+    preferences: CatalogBrowsePreferences
   ) {
+    let account = connection.id
     let generation = epoch
-    let snapshot = account.flatMap { account in
-      storageLease.map { PlaylistSnapshotAccess(storage: storage, account: account, lease: $0) }
+    let snapshot = storageLease.map {
+      PlaylistSnapshotAccess(storage: storage, account: account, lease: $0)
     }
     let model = MusicBrowser(
       service: service,
       isCurrent: { [weak self] in
         guard let self, self.epoch == generation else { return false }
-        return account == nil || self.active?.id == account
+        return self.active?.id == account
       }, preferences: preferences, playlistSnapshot: snapshot)
     model.preferencesChanged = { [weak self] value in
-      guard let self, self.epoch == generation, let account, self.active?.id == account,
+      guard let self, self.epoch == generation, self.active?.id == account,
         let lease = self.storageLease
       else { return }
       self.browseRevision += 1
@@ -668,7 +777,7 @@ import Observation
     }
     model.readSearchHistory = { [weak self] library in
       guard let self, self.epoch == generation, !Task.isCancelled,
-        let account, self.active?.id == account, let lease = self.storageLease,
+        self.active?.id == account, let lease = self.storageLease,
         let owner = self.libraryOwner(library: library)
       else { return [] }
       await self.searchHistoryTask?.value
@@ -681,7 +790,7 @@ import Observation
     }
     model.changeSearchHistory = { [weak self] value, removing in
       guard let self, self.epoch == generation, !Task.isCancelled,
-        let account, self.active?.id == account, let lease = self.storageLease,
+        self.active?.id == account, let lease = self.storageLease,
         let owner = self.libraryOwner(library: value.library)
       else { return }
       self.searchHistoryRevision += 1
@@ -717,7 +826,7 @@ import Observation
       guard let self, self.epoch == generation else { return }
       self.retireUnavailablePlayback(removedLibraries: removed)
     }
-    browser = model
+    session = .signedIn(connection, model)
   }
   private func retireUnavailablePlayback(removedLibraries: Set<String>) {
     if let pending = restoringQueue {
@@ -924,6 +1033,7 @@ import Observation
   func selectionIsCurrent(_ selection: PlaybackSelection) -> Bool {
     guard accepts(selection) else { return false }
     if let pending = restoringQueue {
+      guard current != nil else { return false }
       return pending.matches(selection, account: epoch)
     }
     return queueMembership.matches(
@@ -1057,7 +1167,7 @@ import Observation
     sleepTimerDeadline = nil
   }
   func addConnection() {
-    guard !removingSavedConnection else { return }
+    guard !removingSavedConnection, pendingSignOut == nil else { return }
     persist()
     retire()
     busy = false
@@ -1992,8 +2102,8 @@ import Observation
       busy = false
       return
     }
+    self.session = .ending(old, expired: generation != nil)
     connections.removeAll { $0.id == old.id }
-    pendingSignOut = old.id
     busy = false
     await finishSignOut()
     guard let session else { return }
@@ -2010,12 +2120,15 @@ import Observation
     }
   }
   func finishSignOut() async {
-    guard !busy, let account = pendingSignOut else { return }
+    guard !busy, case .ending(let connection, let expired) = session else { return }
+    let account = connection.id
     busy = true
     var complete = true
     do { try await vault.erase(account: account) } catch { complete = false }
     do { try await storage.removeSavedConnection(account: account) } catch { complete = false }
-    if complete { pendingSignOut = nil }
+    if complete {
+      session = expired ? .recovery(.expired(connection)) : .signedOut(suggested: nil)
+    }
     error = complete ? nil : "Some saved account data could not be removed. Retry sign-out."
     busy = false
   }

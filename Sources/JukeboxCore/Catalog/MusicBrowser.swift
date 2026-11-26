@@ -421,6 +421,14 @@ import Observation
     }
     await loadBrowseLibraries(refresh: false, owner: owner)
   }
+  func prepareSavedQueueLibraries() async throws {
+    guard await loadRoots(refresh: false) != nil else {
+      try Task.checkCancellation()
+      throw ClientError.unavailable
+    }
+    try Task.checkCancellation()
+    guard ownerIsCurrent() else { throw CancellationError() }
+  }
   func admitPlaybackLibrary(_ library: String) async -> Bool {
     guard !library.isEmpty, await loadRoots(refresh: false) != nil,
       !Task.isCancelled, ownerIsCurrent()

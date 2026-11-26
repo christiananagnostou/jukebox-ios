@@ -21,6 +21,10 @@ struct DashboardView: View {
           if browser.loadingLibraries || browser.libraryError != nil || browser.libraries.isEmpty {
             LibraryStatus(browser: browser).musicPagePadding()
           }
+          if store.queueRestoreFailed && store.current == nil {
+            Button("Retry loading saved queue") { store.retryQueueRestoration() }
+              .frame(minHeight: MusicUI.target).musicPagePadding()
+          }
           if browser.authorizedLibrary != nil {
             ForEach(layout.visible) { section in
               VStack(alignment: .leading, spacing: 12) {

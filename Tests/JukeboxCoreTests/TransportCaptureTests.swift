@@ -298,6 +298,7 @@ final class TransportControlEntryTests: XCTestCase {
     for options in [
       ["--read-only-mix"], ["--quick-connect-fixture", "--codes-disabled"],
       ["--quick-connect-fixture", "--example-saved-connections"],
+      ["--quick-connect-fixture", "--example-saved-connections", "--offline-first-reconnect"],
     ] {
       let launch = TransportControlLaunch(arguments: base + options)
       XCTAssertTrue(launch.startup(normal: { false }, isolated: { true }))
@@ -312,9 +313,13 @@ final class TransportControlEntryTests: XCTestCase {
         if case .rejected = launch {} else { XCTFail("Release admitted a test fixture") }
       #endif
     }
-    if case .rejected = TransportControlLaunch(arguments: base + ["--example-saved-connections"]) {
-    } else {
-      XCTFail("Sample connections require the isolated Quick Connect service")
+    for options in [
+      ["--example-saved-connections"], ["--offline-first-reconnect"],
+      ["--example-saved-connections", "--offline-first-reconnect"],
+      ["--quick-connect-fixture", "--offline-first-reconnect"],
+    ] {
+      if case .rejected = TransportControlLaunch(arguments: base + options) { continue }
+      XCTFail("A reconnect outage requires saved accounts and the isolated Quick Connect service")
     }
   }
   func testLiveAccountCheckStartsWithFreshStorageAndCannotBeCombinedWithFixtures() {

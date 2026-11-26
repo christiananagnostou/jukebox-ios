@@ -522,6 +522,12 @@ final class CoreTests: XCTestCase {
       QueueEntry(tracks[0]), QueueEntry(tracks[2], libraryID: "r2"),
     ]
     let saved = QueueState(entries: entries, index: 2, position: 17.25, quality: .high)
+    var missingCursor = QueueState(entries: entries, index: entries.count, position: 17.25)
+    let membership = missingCursor.membershipRevision
+    missingCursor.reconcile(tracks)
+    XCTAssertEqual(missingCursor.current?.id, entries[0].id)
+    XCTAssertEqual(missingCursor.position, 0)
+    XCTAssertEqual(missingCursor.membershipRevision, membership)
     var restored = try JSONDecoder().decode(QueueState.self, from: JSONEncoder().encode(saved))
     restored.reconcile([tracks[0], tracks[2], tracks[0]])
     XCTAssertEqual(restored.entries.map(\.id), Array(entries.dropFirst()).map(\.id))

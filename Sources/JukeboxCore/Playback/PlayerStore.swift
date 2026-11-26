@@ -1548,13 +1548,10 @@ import Observation
       pause()
       return
     }
-    replaceQueueTarget(entries: queue.entries, at: index, action: .next)
-  }
-  private func replaceQueueTarget(at index: Int) {
-    replaceQueueTarget(entries: queue.entries, at: index)
+    replaceQueueTarget(at: index, action: .next)
   }
   private func replaceQueueTarget(
-    entries: [QueueEntry], at index: Int, diagnostic: DiagnosticContext? = nil,
+    entries: [QueueEntry]? = nil, at index: Int, diagnostic: DiagnosticContext? = nil,
     action: DiagnosticAction = .selection, canonicalOrder: [UUID]? = nil, shuffle: Bool? = nil,
     playlistID: String? = nil
   ) {
@@ -1569,7 +1566,7 @@ import Observation
       ownsCommand(generation, request, occurrence) && queue.membershipRevision == membership
         && shuffleEnabled == mode && canonicalQueueOrder == order
     }
-    let target = entries[index]
+    let target = (entries ?? queue.entries)[index]
     let log = diagnostic ?? diagnostics.begin(action, quality: DiagnosticQuality(queue.quality))
     guard ownsReplacement(admission, occurrence) else {
       log?.retire(.superseded)
@@ -1598,7 +1595,7 @@ import Observation
       return
     }
     var replacementQueue = queue
-    replacementQueue.entries = entries
+    if let entries { replacementQueue.entries = entries }
     replacementQueue.index = index
     replacementQueue.position = 0
     if let canonicalOrder {
